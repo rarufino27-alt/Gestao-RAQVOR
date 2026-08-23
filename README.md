@@ -1,23 +1,20 @@
-# RAQVOR Desktop
+## RAQVOR V2.14
 
-Cliente Desktop/PWA completo do RAQVOR.
+# RAQVOR Backend
 
-## Publicação GitHub Pages
+Backend compartilhado pelos clientes RAQVOR Desktop, Mobile e Admin.
 
-Repositório sugerido: `RAQVOR-DESKTOP`
+## Contém
 
-URL esperada:
-`https://rarufino27-alt.github.io/RAQVOR-DESKTOP/`
+- Supabase migrations
+- Edge Functions
+- regras de segurança/RLS
+- suporte
+- IA
+- administração
 
-## Integração
+## Fonte única
 
-Este cliente usa o mesmo projeto Supabase do RAQVOR Mobile e Admin. Não crie outro banco.
+Desktop, Mobile e Admin apontam para o mesmo projeto Supabase. Não crie um Supabase separado para cada aplicativo.
 
-O Desktop é a aplicação financeira completa: Dashboard, Livro Caixa, Dívidas e Despesas, Cartões, Calendário, Relatórios, Suporte, Configurações e Perfil.
-
-## Correções incluídas nesta separação
-
-- correção do `user is not defined` no canal de controle de acesso;
-- `table()` aceita arrays ou HTML já montado, eliminando `rows.join is not a function`;
-- datas aceitam `Date` ou string em `monthKey()`/`yearKey()`;
-- renderização de módulo protegida por `try/catch` para uma tela não derrubar o aplicativo inteiro.
+Leia `docs/INTEGRACAO.md` antes do primeiro deploy.
