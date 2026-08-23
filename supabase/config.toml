@@ -1,8 +1,0 @@
-[functions.raquor-ai]
-verify_jwt = true
-
-[functions.raqvor-support-ai]
-verify_jwt = true
-
-[functions.raqvor-admin]
-verify_jwt = true
