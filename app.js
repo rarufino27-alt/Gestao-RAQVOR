@@ -747,269 +747,75 @@ bindGlobal=function(){_bindGlobalV213();registerDebtEvents();document.querySelec
   /* ---------- CALENDÁRIO: segunda → domingo ---------- */
   calendar=function(m=calendarCursor||currentMonth()){
     calendarCursor=m;
-    const rows=rqMonthTx(m), pay=rows.filter(rqUnpaid).reduce((a,x)=>a+num(x.value),0), rec=rows.filter(x=>x.type==='receita'&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
-    const cash=currentBalance(), netNeed=Math.max(0,pay-Math.max(0,cash)-rec);
-    const days=rqMonthDays(m), todayKey=today(), isCurrent=m===currentMonth();
-    const remaining=days.filter(q=>rqYmd(q.d)>=todayKey&&!rqIsOff(q.date));
-    const daily=remaining.length?netNeed/remaining.length:0;
-    const weeks=rqWeeksForMonth(m);
-    const weeksHtml=weeks.map((w,wi)=>{
-      const ds=[];for(let i=0;i<7;i++){const d=new Date(w.start);d.setDate(w.start.getDate()+i);const k=rqYmd(d);if(d.getMonth()===new Date(m+'-01T12:00:00').getMonth()||d>=new Date(m+'-01T12:00:00')&&d<=new Date(m+'-01T12:00:00'))ds.push({d,k});}
-      const real=ds.filter(q=>monthKey(q.k)===m); if(!real.length)return '';
-      const payW=real.flatMap(q=>rows.filter(x=>x.date===q.k&&x.type==='despesa'&&x.status!=='pago')).reduce((a,x)=>a+num(x.value),0);
-      const recW=real.flatMap(q=>rows.filter(x=>x.date===q.k&&x.type==='receita'&&x.status!=='pago')).reduce((a,x)=>a+num(x.value),0);
-      const active=real.filter(q=>!rqIsOff(q.k)&&(!isCurrent||q.k>=todayKey)).length;
-      const need=Math.max(0,payW-recW); const weekDaily=active?need/active:0;
-      const current=real.some(q=>q.k===todayKey);
-      return `<section class="finance-week ${current?'current calendar-week-current':''}"><div class="finance-week-head"><div><span class="eyebrow">${current?'SEMANA ATUAL':'SEMANA '+(wi+1)}</span><h3>${fmtDate(real[0].k)} <span>até</span> ${fmtDate(real[real.length-1].k)}</h3></div><div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${rqMoney(payW)}</b></div><div><small>A receber</small><b class="positive">${rqMoney(recW)}</b></div><div><small>Busca/dia</small><b>${rqMoney(weekDaily)}</b></div></div></div><div class="finance-week-days">${real.map(q=>{const tx=rows.filter(x=>x.date===q.k);const p=tx.filter(x=>x.type==='despesa'&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0);const r=tx.filter(x=>x.type==='receita'&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0);const off=rqIsOff(q.k);const isToday=q.k===todayKey;return `<div class="calendar-day ${isToday?'calendar-today':''} ${off?'calendar-day-off':''}"><div class="calendar-day-head"><div><b>${rqDayName[q.d.getDay()]}</b><span>${q.d.getDate().toString().padStart(2,'0')}</span></div><button type="button" class="btn secondary mini" data-toggle-day-off="${q.k}">${off?'Trabalhar':'Folga'}</button></div><div class="calendar-day-values"><span class="negative">${p?rqMoney(p):'—'}</span><span class="positive">${r?rqMoney(r):'—'}</span></div>${tx.length?tx.map(x=>`<div class="calendar-item"><span>${esc(x.person||x.category||'Compromisso')}</span><b class="${x.type==='receita'?'positive':'negative'}">${rqMoney(x.value)}</b></div>`).join(''):'<small class="muted">Sem lançamentos</small>'}</div>`}).join('')}</div><div class="finance-week-footer"><div><small>Total a pagar</small><b class="negative">${rqMoney(payW)}</b></div><div><small>Total a receber</small><b class="positive">${rqMoney(recW)}</b></div><div><small>Folgas</small><b>${real.filter(q=>rqIsOff(q.k)).length}</b></div><div><small>Falta cobrir</small><b>${rqMoney(need)}</b></div><div><small>Buscar por dia</small><b>${rqMoney(weekDaily)}</b><span>${active} dia(s) ativos</span></div></div></section>`;
-    }).join('');
-    layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">FLUXO FINANCEIRO</span><h2>${rqMonthLabel(m)}</h2><p>Semanas de segunda a domingo. Folgas alteram apenas a meta de busca diária.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${rqMonthLabel(m)}</b><button class="btn secondary" data-month-next>›</button></div></div><div class="grid compact-kpis calendar-kpis"><div class="card"><div class="label">Total a pagar</div><div class="value negative">${rqMoney(pay)}</div><small>Compromissos em aberto</small></div><div class="card"><div class="label">Total a receber</div><div class="value positive">${rqMoney(rec)}</div><small>Receitas previstas</small></div><div class="card"><div class="label">Em caixa</div><div class="value">${rqMoney(cash)}</div><small>Disponível hoje</small></div><div class="card highlight calendar-daily-highlight"><div class="label">Busca diária necessária</div><div class="value">${rqMoney(daily)}</div><small>${remaining.length} dia(s) ativos • ${rqOff().filter(x=>monthKey(x)===m).length} folga(s)</small></div></div><div class="calendar-note"><b>Regra:</b> a meta considera o que ainda falta pagar, desconta caixa e receitas previstas e distribui o saldo pelos dias ativos. Domingo permanece como dia de trabalho até ser marcado como folga.</div><div class="finance-weeks">${weeksHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
-  };
-
-  /* ---------- LIVRO CAIXA: abertura + taxas + saldo líquido ---------- */
-  function rqEnsureCash(){
-    db.cashbooks=Array.isArray(db.cashbooks)?db.cashbooks:[];
-    let c=db.cashbooks.find(x=>x.date===today());
-    if(c){c.entries=Array.isArray(c.entries)?c.entries:[];c.opening=c.opening||{cash:0,pix:0,card:0};return c}
-    return null;
-  }
-  function rqCashTotals(c){const e=c?.entries||[];const ins=e.filter(x=>x.type==='entrada').reduce((a,x)=>a+num(x.netValue??x.value),0),outs=e.filter(x=>x.type==='saida').reduce((a,x)=>a+num(x.value),0);return {ins,outs,net:ins-outs,opening:num(c?.opening?.cash)+num(c?.opening?.pix)+num(c?.opening?.card)};}
-  function rqCashOpenDialog(){
-    const html=`<div class="modal-overlay open" id="rq-cash-modal"><div class="modal-box cash-open-modal"><button class="modal-close" id="rq-cash-close">×</button><span class="eyebrow">ABERTURA DO CAIXA</span><h2>Abrir caixa de hoje</h2><p>Informe os valores existentes antes de iniciar os lançamentos.</p><form id="rq-open-form" class="form"><div class="field"><label>Dinheiro</label><input id="rq-open-cash" type="number" step="0.01" min="0" value="0"></div><div class="field"><label>Pix</label><input id="rq-open-pix" type="number" step="0.01" min="0" value="0"></div><div class="field"><label>Máquina de cartão</label><input id="rq-open-card" type="number" step="0.01" min="0" value="0"></div><div class="actions full"><button class="btn secondary" type="button" id="rq-cash-cancel">Cancelar</button><button class="btn primary">Abrir Caixa</button></div></form></div></div>`;document.body.insertAdjacentHTML('beforeend',html);const close=()=>document.querySelector('#rq-cash-modal')?.remove();$('#rq-cash-close').onclick=close;$('#rq-cash-cancel').onclick=close;$('#rq-open-form').onsubmit=e=>{e.preventDefault();const c={id:uid(),date:today(),openedAt:new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),closedAt:null,opening:{cash:num($('#rq-open-cash').value),pix:num($('#rq-open-pix').value),card:num($('#rq-open-card').value)},entries:[]};db.cashbooks.push(c);save();close();toast('Caixa aberto');cashbook()};
-  }
-  function rqCashEntryModal(type='entrada'){
-    const c=rqEnsureCash();if(!c){toast('Abra o caixa primeiro');rqCashOpenDialog();return}
-    const html=`<div class="modal-overlay open" id="rq-entry-modal"><div class="modal-box cash-entry-modal"><button class="modal-close" id="rq-entry-close">×</button><span class="eyebrow">${type==='entrada'?'ENTRADA':'SAÍDA'} DE CAIXA</span><h2>Registrar ${type==='entrada'?'entrada':'saída'}</h2><form id="rq-entry-form" class="form"><div class="field"><label>Forma de pagamento</label><select id="rq-method"><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="credito">Cartão de crédito</option><option value="debito">Cartão de débito</option></select></div><div class="field"><label>Modo do valor</label><select id="rq-mode"><option value="net">Quero receber o valor líquido informado</option><option value="gross">O valor informado já é o valor cobrado</option></select></div><div class="field"><label>Valor</label><input id="rq-value" type="number" step="0.01" min="0" required></div><div class="field"><label>Descrição</label><input id="rq-desc" required placeholder="Ex.: venda, pagamento, serviço..."></div><div class="field"><label>Origem / destino</label><input id="rq-source" placeholder="Opcional"></div><div class="field full"><div class="cash-calc" id="rq-calc">Sem acréscimo</div></div><div class="actions full"><button type="button" class="btn secondary" id="rq-entry-cancel">Cancelar</button><button class="btn primary">Registrar</button></div></form></div></div>`;document.body.insertAdjacentHTML('beforeend',html);const close=()=>document.querySelector('#rq-entry-modal')?.remove();$('#rq-entry-close').onclick=close;$('#rq-entry-cancel').onclick=close;const recalc=()=>{const method=$('#rq-method').value,mode=$('#rq-mode').value,v=num($('#rq-value').value);if(type==='saida'){ $('#rq-calc').textContent=`Saída exata: ${rqMoney(v)}`;return }let rate=method==='credito'?0.95:method==='debito'?0.97:1;let gross=mode==='net'?(rate?v/rate:v):v;let net=mode==='net'?v:v*rate;$('#rq-calc').innerHTML=`Cobrar: <b>${rqMoney(gross)}</b> • Receber líquido: <b>${rqMoney(net)}</b>${rate<1?` • Taxa: ${rqMoney(gross-net)}`:''}`};['#rq-method','#rq-mode','#rq-value'].forEach(s=>$(s).addEventListener('input',recalc));['#rq-method','#rq-mode'].forEach(s=>$(s).addEventListener('change',recalc));recalc();$('#rq-entry-form').onsubmit=e=>{e.preventDefault();const method=$('#rq-method').value,v=num($('#rq-value').value),mode=$('#rq-mode').value;let rate=method==='credito'?0.95:method==='debito'?0.97:1;const gross=type==='saida'?v:(mode==='net'?v/rate:v),net=type==='saida'?v:(mode==='net'?v:v*rate),fee=Math.max(0,gross-net);c.entries.push({id:uid(),type,method,grossValue:gross,netValue:net,value:type==='saida'?v:net,fee,description:$('#rq-desc').value.trim(),source:$('#rq-source').value.trim(),time:new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})});save();close();toast('Movimento registrado');cashbook()};
-  }
-  cashbook=function(){
-    const c=rqEnsureCash(); if(!c){layout('Livro Caixa',`<div class="page-intro cash-intro"><div><span class="eyebrow">LIVRO CAIXA</span><h2>Caixa diário</h2><p>Comece informando o dinheiro, Pix e cartão existentes na abertura.</p></div></div><div class="card cash-open-cta"><div><h3>Caixa ainda não aberto</h3><p>Abra o caixa para registrar vendas, entradas e saídas.</p></div><button class="btn primary" id="rq-open-cash">Abrir Caixa</button></div>`);$('#rq-open-cash').onclick=rqCashOpenDialog;return}
-    const t=rqCashTotals(c), entries=c.entries||[];const rows=entries.slice().reverse().map(x=>`<tr><td>${esc(x.time||'—')}</td><td><span class="flow-badge ${x.type}">${x.type==='entrada'?'Entrada':'Saída'}</span></td><td>${esc(x.method||'—')}</td><td>${esc(x.description||'—')}</td><td>${esc(x.source||'—')}</td><td>${x.type==='entrada'?`<span class="positive">+ ${rqMoney(x.netValue??x.value)}</span>`:`<span class="negative">− ${rqMoney(x.value)}</span>`}</td><td>${x.fee?rqMoney(x.fee):'—'}</td><td>${c.closedAt?'<span class="pill paid">Fechado</span>':`<button class="btn danger mini" data-rq-del-cash="${x.id}">Excluir</button>`}</td></tr>`).join('');
-    layout('Livro Caixa',`<div class="page-intro cash-intro"><div><span class="eyebrow">LIVRO CAIXA DIÁRIO</span><h2>${fmtDate(c.date)}</h2><p>${c.closedAt?'Caixa fechado':'Caixa aberto desde '+esc(c.openedAt)}</p></div><div class="cash-result ${t.net>=0?'positive':'negative'}"><small>SALDO LÍQUIDO</small><b>${rqMoney(t.net)}</b><span>${c.closedAt?'Fechado':'Em aberto'}</span></div></div><div class="grid compact-kpis"><div class="card"><div class="label">Abertura</div><div class="value">${rqMoney(t.opening)}</div><small>Dinheiro ${rqMoney(c.opening.cash)} • Pix ${rqMoney(c.opening.pix)} • Cartão ${rqMoney(c.opening.card)}</small></div><div class="card"><div class="label">Entradas líquidas</div><div class="value positive">${rqMoney(t.ins)}</div></div><div class="card"><div class="label">Saídas</div><div class="value negative">${rqMoney(t.outs)}</div></div><div class="card"><div class="label">Resultado</div><div class="value ${t.net>=0?'positive':'negative'}">${rqMoney(t.net)}</div></div></div><div class="actions"><button class="btn primary" id="rq-new-in" ${c.closedAt?'disabled':''}>+ Entrada</button><button class="btn secondary" id="rq-new-out" ${c.closedAt?'disabled':''}>− Saída</button>${c.closedAt?'':'<button class="btn danger" id="rq-close-cash">Fechar Caixa</button>'}</div><div class="card data-card"><div class="section-head"><div><h3>Movimentações</h3><p>Cartão de crédito: líquido = valor cobrado × 0,95. Débito: líquido = valor cobrado × 0,97.</p></div></div>${rows?table(rows,['Hora','Tipo','Forma','Descrição','Origem / destino','Recebido / Saída','Taxa','Ações']):'<div class="empty">Nenhum movimento registrado.</div>'}</div>`);
-    $('#rq-new-in').onclick=()=>rqCashEntryModal('entrada');$('#rq-new-out').onclick=()=>rqCashEntryModal('saida');$('#rq-close-cash')?.addEventListener('click',()=>{if(confirm('Fechar o caixa de hoje? Depois do fechamento os lançamentos não poderão ser alterados.')){c.closedAt=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});c.net=rqCashTotals(c).net;save();toast('Caixa fechado');cashbook()}});document.querySelectorAll('[data-rq-del-cash]').forEach(b=>b.onclick=()=>{if(confirm('Excluir este movimento?')){c.entries=c.entries.filter(x=>x.id!==b.dataset.rqDelCash);save();cashbook()}});
-  };
-
-  /* ---------- DÍVIDAS: exclusão parcial + empréstimo com juros ---------- */
-  function rqDebtDeleteFuture(id){const d=db.debts.find(x=>x.id===id);if(!d)return;if(!confirm('Excluir somente parcelas futuras desta dívida? Parcelas já pagas serão preservadas.'))return;db.transactions=db.transactions.filter(x=>!(x.debtId===id&&x.status!=='pago'));d.remaining=db.transactions.filter(x=>x.debtId===id&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0);d.status=d.remaining>0?'ativo':'quitado';save();toast('Parcelas futuras removidas');debtsExpenses()}
-  const rqOldDebtForm=debtForm;
-  debtForm=function(id=null){const d=id?db.debts.find(x=>x.id===id):null;layout(d?'Editar Dívida':'Nova Dívida',`<div class="card"><form id="rq-debt-form" class="form"><div class="field"><label>Credor</label><input id="rq-creditor" value="${esc(d?.creditor||'')}" required></div><div class="field"><label>Tipo</label><select id="rq-kind"><option>Instituição</option><option>Pessoa física</option><option>Cartão</option><option>Financiamento</option><option>Outros</option></select></div><div class="field"><label>Valor original</label><input id="rq-dvalue" type="number" step="0.01" min="0" value="${d?.value??''}" required></div><div class="field"><label>Parcelas</label><input id="rq-installments" type="number" min="1" value="${d?.installments||1}" required></div><div class="field"><label>Primeiro vencimento</label><input id="rq-firstdate" type="date" value="${d?.firstDate||today()}" required></div><div class="field"><label>Juros (%)</label><input id="rq-interest" type="number" step="0.01" min="0" value="${d?.interest||0}"></div><div class="field"><label>Forma de pagamento</label><select id="rq-payment-type"><option value="unico">Pagamento único</option><option value="parcelado">Parcelado</option><option value="recorrente">Recorrente</option></select></div><div class="field full"><label>Observação</label><textarea id="rq-dnote">${esc(d?.note||'')}</textarea></div><div class="actions full"><button class="btn primary">${d?'Salvar alterações':'Criar dívida'}</button><button type="button" class="btn secondary" data-view="movimentos">Cancelar</button></div></form></div>`);if(d){$('#rq-kind').value=d.kind||'Instituição';$('#rq-payment-type').value=d.paymentType||'parcelado'}$('#rq-debt-form').onsubmit=e=>{e.preventDefault();const creditor=$('#rq-creditor').value.trim(),kind=$('#rq-kind').value,value=num($('#rq-dvalue').value),parts=Math.max(1,num($('#rq-installments').value)),first=$('#rq-firstdate').value,interest=num($('#rq-interest').value),ptype=$('#rq-payment-type').value,note=$('#rq-dnote').value.trim();const total=value*(1+interest/100),part=ptype==='unico'?total:total/parts,id2=d?.id||uid();const data={id:id2,creditor,kind,value,totalPayable:total,installments:parts,installmentValue:part,firstDate:first,interest,paymentType:ptype,note,remaining:total,status:'ativo',createdAt:d?.createdAt||today()};if(d)db.debts=db.debts.map(x=>x.id===id2?{...x,...data}:x);else db.debts.push(data);db.transactions=db.transactions.filter(x=>x.debtId!==id2||x.status==='pago');if(ptype==='recorrente'){const dt=iso(first);db.transactions.push({id:uid(),date:rqYmd(dt),value:part,category:kind,person:creditor,status:'previsto',type:'despesa',debtId:id2,installment:1,installments:1,paymentType:'recorrente',note})}else{for(let i=0;i<parts;i++){const dt=iso(first);dt.setMonth(dt.getMonth()+i);db.transactions.push({id:uid(),date:rqYmd(dt),value:part,category:kind,person:creditor,status:'previsto',type:'despesa',debtId:id2,installment:i+1,installments:parts,paymentType:ptype,note:`${note} — parcela ${i+1}/${parts}`})}}save();toast(d?'Dívida atualizada':'Dívida criada');debtsExpenses()}}
-
-  const rqOldLoanForm=loanForm;
-  loanForm=function(id=null){const l=id?db.loans.find(x=>x.id===id):null;layout(l?'Editar Empréstimo':'Novo Empréstimo',`<div class="card"><div class="loan-warning"><b>Empréstimo</b><span>Informe o valor realmente recebido. Os juros são usados para calcular o total devido.</span></div><form id="rq-loan-form" class="form"><div class="field"><label>Credor / instituição</label><input id="rq-lperson" value="${esc(l?.person||'')}" required></div><div class="field"><label>Valor recebido</label><input id="rq-lvalue" type="number" step="0.01" min="0" value="${l?.value??''}" required></div><div class="field"><label>Juros (%)</label><input id="rq-linterest" type="number" step="0.01" min="0" value="${l?.interestRate||l?.interest||0}"></div><div class="field"><label>Pagamento</label><select id="rq-lmode"><option value="principal_juros">Principal + juros</option><option value="juros">Somente juros</option></select></div><div class="field"><label>Quantidade de parcelas</label><input id="rq-lparts" type="number" min="1" value="${l?.installments||1}" required></div><div class="field"><label>Primeiro vencimento</label><input id="rq-ldate" type="date" value="${l?.firstDate||today()}" required></div><div class="field"><label>Valor da parcela</label><input id="rq-lpart" type="number" step="0.01" value="${l?.installmentValue??''}" readonly></div><div class="field"><label>Total a pagar</label><input id="rq-ltotal" type="number" step="0.01" value="${l?.totalPayable??''}" readonly></div><div class="field full"><label>Observação</label><textarea id="rq-lnote">${esc(l?.note||'')}</textarea></div><div class="actions full"><button class="btn primary">Salvar empréstimo</button><button type="button" class="btn secondary" data-view="movimentos">Cancelar</button></div></form></div>`);const calc=()=>{const p=num($('#rq-lvalue').value),i=num($('#rq-linterest').value),n=Math.max(1,num($('#rq-lparts').value)),mode=$('#rq-lmode').value,total=mode==='juros'?p*i/100*n:p*(1+i/100),part=total/n;$('#rq-lpart').value=part.toFixed(2);$('#rq-ltotal').value=total.toFixed(2)};['#rq-lvalue','#rq-linterest','#rq-lparts','#rq-lmode'].forEach(s=>$(s).addEventListener('input',calc));$('#rq-lmode').addEventListener('change',calc);calc();$('#rq-loan-form').onsubmit=e=>{e.preventDefault();const p=num($('#rq-lvalue').value),interest=num($('#rq-linterest').value),parts=Math.max(1,num($('#rq-lparts').value)),mode=$('#rq-lmode').value,first=$('#rq-ldate').value,total=mode==='juros'?p*interest/100*parts:p*(1+interest/100),part=total/parts,loanId=l?.id||uid(),person=$('#rq-lperson').value.trim();const data={id:loanId,person,value:p,interestRate:interest,interestMode:mode,installments:parts,installmentValue:part,totalPayable:total,firstDate:first,status:l?.status||'recebido',note:$('#rq-lnote').value.trim(),createdAt:l?.createdAt||today()};if(l)db.loans=db.loans.map(x=>x.id===loanId?data:x);else db.loans.push(data);db.transactions=db.transactions.filter(x=>x.loanId!==loanId);if(data.status==='recebido')db.transactions.push({id:uid(),date:today(),value:p,category:'Empréstimo recebido',person,type:'receita',status:'pago',loanId,note:'Valor efetivamente recebido'});for(let i=0;i<parts;i++){const dt=iso(first);dt.setMonth(dt.getMonth()+i);db.transactions.push({id:uid(),date:rqYmd(dt),value:part,category:'Empréstimo',person,status:'previsto',type:'despesa',loanId,installment:i+1,installments:parts,note:`Empréstimo ${loanId} — parcela ${i+1}/${parts}`})}db.debts=db.debts.filter(x=>x.loanId!==loanId);db.debts.push({id:uid(),loanId,creditor:person,kind:'Empréstimo',value:p,totalPayable:total,installments:parts,installmentValue:part,firstDate:first,interest,status:'ativo',remaining:total,note:data.note});save();toast('Empréstimo salvo');debtsExpenses()}}
-
-  /* ---------- CONFIGURAÇÕES: reset financeiro completo ---------- */
-  const rqOldConfig=config;
-  config=function(){rqOldConfig();const oldReset=$('#reset-data');if(oldReset){const b=oldReset.cloneNode(true);oldReset.replaceWith(b);b.textContent='Restaurar configuração e apagar registros';b.className='btn danger';b.onclick=()=>{const ok=confirm('RESTORE RAQVOR\n\nTodos os registros financeiros deste espaço serão apagados. O histórico de uso do aplicativo não será alterado. Continuar?');if(!ok)return;db={...defaultDB(),settings:{...defaultDB().settings,currency:db.settings.currency||'BRL'}};db.settings.daysOff=[];db.creditors=[];save();toast('Configuração restaurada');setTimeout(()=>render('dashboard'),250)}}}
-
-  /* ---------- bindings adicionais ---------- */
-  const rqBind=bindGlobal;
-  bindGlobal=function(){rqBind();document.querySelectorAll('[data-toggle-day-off]').forEach(b=>b.onclick=()=>{const k=b.dataset.toggleDayOff;db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];db.settings.daysOff=db.settings.daysOff.includes(k)?db.settings.daysOff.filter(x=>x!==k):[...db.settings.daysOff,k];save();calendar(calendarCursor||currentMonth())});document.querySelectorAll('[data-month-prev]').forEach(b=>b.onclick=()=>{calendarCursor=shiftMonth(calendarCursor||currentMonth(),-1);calendar(calendarCursor)});document.querySelectorAll('[data-month-next]').forEach(b=>b.onclick=()=>{calendarCursor=shiftMonth(calendarCursor||currentMonth(),1);calendar(calendarCursor)});document.querySelectorAll('[data-del-debt-future]').forEach(b=>b.onclick=()=>rqDebtDeleteFuture(b.dataset.delDebtFuture))}
-
-  /* Add partial deletion action to debt tables after every render. */
-  const rqDebtExpense=debtsExpenses;
-  debtsExpenses=function(){rqDebtExpense.apply(this,arguments);document.querySelectorAll('[data-edit-debt]').forEach(b=>{const d=b.parentElement?.parentElement?.querySelector('td');});document.querySelectorAll('[data-del-debt]').forEach(b=>{const id=b.dataset.delDebt;if(!b.parentElement.querySelector(`[data-del-debt-future="${id}"]`)){b.insertAdjacentHTML('afterend',` <button class="btn secondary mini" data-del-debt-future="${id}">Excluir futuras</button>`)}})};
-})();
-
-
-/* ==========================================================
-   RAQVOR V2.16 — DESKTOP FINAL OVERRIDES
-   Dashboard preservado. Ajustes: caixa, calendário, dívidas,
-   credores, recorrentes, parcelas/edição parcial e restauração.
-   ========================================================== */
-function toggleDayOff(date){
-  db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];
-  const i=db.settings.daysOff.indexOf(date);
-  if(i>=0) db.settings.daysOff.splice(i,1); else db.settings.daysOff.push(date);
-  save(); calendar(calendarCursor);
-}
-function calendar(m=calendarCursor||currentMonth()){
-  calendarCursor=m;
-  const first=iso(`${m}-01`);
-  const lastDay=new Date(first.getFullYear(),first.getMonth()+1,0).getDate();
-  const last=iso(`${m}-${String(lastDay).padStart(2,'0')}`), todayKey=today();
-  const monthItems=db.transactions.filter(x=>monthKey(x.date)===m);
-  const pendingPay=monthItems.filter(x=>x.type==='despesa'&&x.status!=='pago');
-  const totalPay=pendingPay.reduce((a,x)=>a+num(x.value),0);
-  const cash=Math.max(0,currentBalance());
-  const debt=Math.max(0,totalPay-cash);
-  let remainingDays=0;
-  const start=monthKey(first)===currentMonth()?iso(todayKey):first;
-  for(let d=new Date(start);d<=last;d.setDate(d.getDate()+1)){
-    const k=ymd(d); if(!db.settings.daysOff.includes(k)) remainingDays++;
-  }
-  remainingDays=Math.max(1,remainingDays);
-  const dailyNeed=debt/remainingDays;
-  const weeks=financialWeekRanges(m);
-  let carryCash=cash;
-  const weekHtml=weeks.map((w,idx)=>{
-    const items=monthItems.filter(x=>w.days.includes(x.date));
-    const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
-    const rec=items.filter(x=>x.type==='receita');
-    const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
-    const received=rec.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
-    const planned=rec.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
-    const weekDebt=Math.max(0,payTotal-carryCash-received);
-    const active=w.days.filter(d=>d>=todayKey&&!db.settings.daysOff.includes(d)).length||1;
-    const daily=weekDebt/active;
-    const before=carryCash;
-    carryCash=Math.max(0,before+received-payTotal);
-    const groups=groupCreditor(pay);
-    const dayButtons=w.days.map(d=>{
-      const off=db.settings.daysOff.includes(d);
-      const isToday=d===todayKey;
-      const count=monthItems.filter(x=>x.date===d).length;
-      return `<button class="calendar-day-chip ${off?'off':''} ${isToday?'today':''}" data-toggle-dayoff="${d}" title="${off?'Remover folga':'Marcar como folga'}"><span>${new Intl.DateTimeFormat('pt-BR',{weekday:'short'}).format(iso(d)).replace('.','')}</span><b>${fmtDate(d).slice(0,5)}</b>${count?`<em>${count}</em>`:''}</button>`;
-    }).join('');
-    return `<section class="finance-week ${w.days.includes(todayKey)?'current':''}">
-      <div class="finance-week-head"><div><span class="eyebrow">SEMANA ${idx+1}${w.days.includes(todayKey)?' • ATUAL':''}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div><div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(received+planned)}</b></div><div><small>Busca diária</small><b>${money(daily)}</b></div></div></div>
-      <div class="calendar-day-strip">${dayButtons}</div>
-      <div class="finance-week-body">${groups.length?groups.map(g=>`<div class="creditor-line"><div class="creditor-main"><b>${esc(g.name)}</b><span>${g.items.map(x=>`${fmtDate(x.date)} • ${esc(x.category||'pagamento')}`).join(' · ')}</span></div><strong class="negative">${money(g.total)}</strong></div>`).join(''):`<div class="empty">Nenhum pagamento previsto nesta semana.</div>`}<div class="week-revenue"><span><b>Receitas</b><small>${received?`Recebidas ${money(received)}`:'Nenhuma recebida'}${planned?` • previstas ${money(planned)}`:''}</small></span><strong class="positive">+ ${money(received)}</strong></div></div>
-      <div class="finance-week-footer"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(received+planned)}</b></div><div><small>Caixa após semana</small><b>${money(carryCash)}</b></div><div><small>Saldo da semana</small><b class="${weekDebt?'negative':'positive'}">${money(weekDebt)}</b></div><div><small>Folgas</small><b>${w.days.filter(d=>db.settings.daysOff.includes(d)).length}</b></div></div>
-    </section>`;
-  }).join('');
-  layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>O mês é dividido em semanas de <b>segunda a domingo</b>. Clique em um dia para marcar ou retirar uma folga. A busca diária é recalculada automaticamente.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div></div>
-  <div class="finance-summary-banner"><div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(dailyNeed)}</strong><span>${remainingDays} dias úteis para busca</span></div></div>
-  <div class="calendar-note"><b>Regra:</b> domingo a domingo, sem folga por padrão. Um dia marcado como folga não entra na divisão da busca. Abaixo estão todos os pagamentos previstos do mês agrupados por semana e credor.</div>
-  <div class="finance-weeks">${weekHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
-}
-function deleteDebtInstallment(txId){
-  const tx=db.transactions.find(x=>x.id===txId); if(!tx)return;
-  if(!confirm(`Excluir somente a parcela de ${money(tx.value)} com vencimento em ${fmtDate(tx.date)}?`))return;
-  const debtId=tx.debtId||tx.loanId;
-  db.transactions=db.transactions.filter(x=>x.id!==txId);
-  if(debtId){
-    const d=db.debts.find(x=>x.id===debtId); if(d){d.remaining=Math.max(0,num(d.remaining??d.totalPayable)-num(tx.value));d.updatedAt=today();}
-    const l=db.loans.find(x=>x.id===debtId); if(l)l.remaining=Math.max(0,num(l.remaining??l.totalPayable)-num(tx.value));
-  }
-  save();toast('Parcela excluída. O saldo restante foi recalculado.');debtsExpenses('overview');
-}
-function debtsExpenses(mode='overview'){
-  creditorRecords();
-  if(mode==='cartoes')return cardPage();
-  if(mode==='recorrentes')return recurring();
-  if(mode==='creditors'){
-    const cards=(db.creditors||[]).map(c=>{const tx=db.transactions.filter(x=>(x.person||'').trim().toLowerCase()===c.name.trim().toLowerCase()&&x.type==='despesa');const monthly=tx.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);const total=tx.reduce((a,x)=>a+num(x.value),0);return `<button class="creditor-card" data-creditor="${esc(c.id)}"><div><span class="creditor-avatar">${esc(c.name.charAt(0).toUpperCase())}</span><span><b>${esc(c.name)}</b><small>${esc(c.type||'Credor')}</small></span></div><strong>${money(monthly)}<small>em aberto</small></strong><em>${tx.length} lançamentos</em></button>`}).join('');
-    const vals=(db.creditors||[]).map(c=>debtTotalsForCreditor(c.name).monthly);const max=Math.max(1,...vals);
-    layout('Credores',`<div class="section-head"><div><span class="eyebrow">DÍVIDAS E DESPESAS</span><h2>Credores</h2><p>Cada pessoa ou instituição possui sua própria visão. Dívidas com datas diferentes permanecem separadas.</p></div><button class="btn primary" data-new-creditor>+ Novo credor</button></div><div class="debt-tabs"><button class="tab" data-dd-tab="overview">Visão geral</button><button class="tab active" data-dd-tab="creditors">Credores</button><button class="tab" data-view="recorrentes">Recorrentes</button><button class="tab" data-view="cartoes">Cartões de crédito</button></div><div class="creditor-list">${cards||'<div class="empty">Nenhum credor cadastrado.</div>'}</div><div class="card debt-chart"><div class="section-head"><div><h3>Concentração mensal por credor</h3><p>Quanto cada credor representa no período atual.</p></div></div>${(db.creditors||[]).sort((a,b)=>debtTotalsForCreditor(b.name).monthly-debtTotalsForCreditor(a.name).monthly).slice(0,10).map(c=>{const v=debtTotalsForCreditor(c.name).monthly;return `<div class="bar-row"><span>${esc(c.name)}</span><div><i style="width:${Math.min(100,v/max*100)}%"></i></div><b>${money(v)}</b></div>`}).join('')}</div>`);return;
-  }
-  const tx=db.transactions.filter(x=>x.type==='despesa').sort((a,b)=>a.date.localeCompare(b.date));
-  const open=tx.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);const recurringOpen=(db.recurring||[]).filter(x=>x.active&&x.type==='despesa').reduce((a,x)=>a+num(x.value),0);const finished=(db.debts||[]).filter(d=>debtRemaining(d.id)<=0).length;
-  const rows=tx.map(x=>`<tr><td>${fmtDate(x.date)}</td><td>${esc(x.person||x.category||'—')}</td><td>${esc(x.category||'—')}</td><td>${money(x.value)}</td><td>${statusPill(x.status,x.priority)}</td><td><button class="btn secondary mini" data-edit="${x.id}">Editar</button> <button class="btn danger mini" data-del="${x.id}">Excluir</button>${x.debtId||x.loanId?` <button class="btn danger mini" data-del-parcel="${x.id}">Excluir parcela</button>`:''}</td></tr>`).join('');
-  layout('Dívidas e Despesas',`<div class="hero premium-hero"><div><small>CONTROLE DE COMPROMISSOS</small><h2>Tudo que existe a pagar, organizado.</h2><small>Parcelados, empréstimos, recorrentes e credores em estruturas separadas.</small></div><div class="side"><small>EM ABERTO</small><br><b>${money(open)}</b><br><small>${finished} dívidas quitadas</small></div></div><div class="debt-kpi-grid"><div class="card"><span>Com prazo</span><b>${money(Math.max(0,open-recurringOpen))}</b><small>parcelados e compromissos com término</small></div><div class="card"><span>Recorrentes</span><b>${money(recurringOpen)}</b><small>sem prazo de término</small></div><div class="card"><span>Credores</span><b>${db.creditors.length}</b><small>pessoas e instituições</small></div><div class="card"><span>Total em aberto</span><b>${money(open)}</b><small>parcelas ainda não pagas</small></div></div><div class="actions"><button class="btn primary" data-register-debt>+ Registrar pagamento ou dívida</button><button class="btn secondary" data-new-creditor>+ Novo credor</button><button class="btn secondary" data-view="cartoes">Cartões de crédito</button></div><div class="debt-tabs"><button class="tab active" data-dd-tab="overview">Visão geral</button><button class="tab" data-dd-tab="creditors">Credores</button><button class="tab" data-view="recorrentes">Recorrentes</button><button class="tab" data-view="cartoes">Cartões</button></div><div class="card"><div class="section-head"><div><h3>Pagamentos e parcelas</h3><p>A data de vencimento é a data de pagamento usada pelo Calendário Financeiro.</p></div></div>${table(rows,['Vencimento','Credor','Categoria','Valor','Status','Ações'])}</div>`);
-}
-function loanForm(id=null){
-  const l=id?db.loans.find(x=>x.id===id):null;
-  layout(l?'Editar Empréstimo':'Novo Empréstimo',`<div class="card"><div class="loan-warning"><b>Empréstimo e dívida são registrados juntos.</b><span>Informe o valor efetivamente recebido, juros e a forma de pagamento. O sistema gera as parcelas com os vencimentos informados.</span></div><form id="loan-form" class="form"><div class="field"><label>Credor / instituição</label><input id="lperson" value="${esc(l?.person||'')}" required></div><div class="field"><label>Cartão, se aplicável</label><select id="lcard">${cardOptions(l?.cardId||'')}</select></div><div class="field"><label>Valor efetivamente recebido</label><input id="lvalue" type="number" step="0.01" min="0" value="${l?.value??''}" required></div><div class="field"><label>Juros do empréstimo (%)</label><input id="linterest" type="number" step="0.01" min="0" value="${l?.interestRate??0}"></div><div class="field"><label>Forma de pagamento</label><select id="lpaymentType"><option value="principal_interest">Principal + juros parcelados</option><option value="interest_only">Somente juros</option><option value="total_at_end">Total no vencimento</option></select></div><div class="field"><label>Quantidade de parcelas / períodos</label><input id="lparts" type="number" min="1" value="${l?.installments||1}" required></div><div class="field"><label>Valor da parcela</label><input id="lpartvalue" type="number" step="0.01" min="0" value="${l?.installmentValue??''}" required></div><div class="field"><label>Total estimado a pagar</label><input id="ltotal" type="number" step="0.01" value="${l?.totalPayable??''}" readonly></div><div class="field"><label>Primeiro vencimento</label><input id="ldate" type="date" value="${l?.firstDate||today()}" required></div><div class="field"><label>Fonte do pagamento</label><input id="lpayfrom" value="${esc(l?.paymentSource||'')}" placeholder="Conta, banco, caixa..."></div><div class="field"><label>Status</label><select id="lstatus"><option value="previsto">Previsto</option><option value="recebido">Já recebido</option></select></div><div class="field full"><label>Observação</label><textarea id="lnote">${esc(l?.note||'')}</textarea></div><div class="actions full"><button class="btn primary">Salvar empréstimo</button><button type="button" class="btn secondary" data-view="movimentos">Cancelar</button></div></form></div>`);
-  if(l)$('#lpaymentType').value=l.paymentType||'principal_interest';
-  const recalc=()=>{const principal=num($('#lvalue').value),rate=num($('#linterest').value)/100,parts=Math.max(1,num($('#lparts').value)),type=$('#lpaymentType').value;let total=principal*(1+rate);let part=total/parts;if(type==='interest_only'){part=principal*rate;total=part*parts+principal}else if(type==='total_at_end'){part=0;total=principal*(1+rate)}if(num($('#lpartvalue').value)>0&&type==='principal_interest')part=num($('#lpartvalue').value);$('#lpartvalue').value=part.toFixed(2);$('#ltotal').value=total.toFixed(2)};
-  ['#lvalue','#linterest','#lparts','#lpaymentType'].forEach(s=>$(s).addEventListener('input',recalc));recalc();
-  $('#loan-form').onsubmit=e=>{e.preventDefault();const value=num($('#lvalue').value),rate=num($('#linterest').value),parts=Math.max(1,num($('#lparts').value)),part=num($('#lpartvalue').value),type=$('#lpaymentType').value;let total=num($('#ltotal').value);const person=$('#lperson').value.trim(),cardId=$('#lcard').value||null,firstDate=$('#ldate').value,paymentSource=$('#lpayfrom').value.trim(),status=$('#lstatus').value,note=$('#lnote').value;const lid=l?.id||uid();const data={id:lid,person,value,interestRate:rate,paymentType:type,installments:parts,installmentValue:part,totalPayable:total,remaining:total,firstDate,status,cardId,paymentSource,note,createdAt:l?.createdAt||today()};if(l){db.loans=db.loans.map(x=>x.id===lid?data:x)}else db.loans.push(data);db.transactions=db.transactions.filter(x=>x.loanId!==lid);if(status==='recebido')db.transactions.push({id:uid(),date:today(),value,category:'Empréstimo recebido',person,cardId,paymentSource,status:'pago',type:'receita',loanId:lid,loanPrincipal:true});const base=iso(firstDate);for(let i=0;i<parts;i++){const dt=new Date(base);dt.setMonth(dt.getMonth()+i);let v=part;if(type==='interest_only')v=part+(i===parts-1?value:0);if(type==='total_at_end')v=i===parts-1?total:0;if(v<=0)continue;db.transactions.push({id:uid(),date:ymd(dt),value:v,category:'Empréstimo',person,cardId,paymentSource,status:'previsto',weekAssigned:weekOf(dt),note:`Empréstimo ${lid} — período ${i+1}/${parts}`,type:'despesa',loanId:lid,installment:i+1})}db.debts=db.debts.filter(d=>d.loanId!==lid);db.debts.push({id:uid(),loanId:lid,cardId,creditor:person,kind:'Empréstimo',value,totalPayable:total,installments:parts,installmentValue:part,firstDate,status:status==='recebido'?'ativo':'previsto',remaining:total,paymentSource,interestRate:rate,paymentType:type,createdAt:today()});save();toast('Empréstimo registrado e parcelas geradas.');debtsExpenses('overview')};
-}
-function config(){
-  layout('Configurações',`<div class="settings-shell"><div class="settings-intro"><div><span>RAQVOR</span><h2>Configurações</h2><p>O nome RAQVOR é imutável. As demais configurações controlam a organização financeira.</p></div><div class="settings-badge">● Supabase sincronizado</div></div><form id="cfg" class="settings-grid"><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">R</div><div><h3>Identidade e moeda</h3><p>Nome fixo e moeda usada nos cálculos.</p></div></div><div class="form settings-form"><div class="field"><label>Nome do aplicativo</label><input value="RAQVOR" disabled></div><div class="field"><label>Moeda</label><select id="currency"><option value="BRL">R$ — Real brasileiro</option><option value="USD">$ — Dólar americano</option><option value="EUR">€ — Euro</option></select></div></div></section><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">◎</div><div><h3>Ciclo financeiro</h3><p>O início e a duração podem ser ajustados pelo usuário.</p></div></div><div class="form settings-form"><div class="field"><label>Primeiro dia do ciclo</label><input id="cycleStart" type="number" min="1" max="31" value="${db.settings.cycleStart||1}"></div><div class="field"><label>Período</label><select id="cycleLength"><option value="5">5 dias</option><option value="7">Semanal — 7 dias</option><option value="15">Quinzenal — 15 dias</option><option value="30">Mensal — 30 dias</option></select></div></div></section><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">✓</div><div><h3>Folgas</h3><p>Folgas retiram o dia da divisão da busca diária.</p></div></div><div class="field"><label>Datas de folga</label><input id="daysOff" value="${esc((db.settings.daysOff||[]).join(', '))}" placeholder="2026-08-31, 2026-09-07"></div></section><section class="settings-card danger-zone"><div class="settings-card-head"><div class="settings-icon">!</div><div><h3>Restaurar configuração</h3><p>Apaga os registros financeiros e mantém somente o histórico técnico de uso do aplicativo.</p></div></div><button type="button" class="btn danger" id="restore-all">Restaurar RAQVOR</button></section><div class="actions full"><button class="btn primary">Salvar configurações</button></div></form></div>`);
-  $('#currency').value=db.settings.currency||'BRL';$('#cycleLength').value=String(db.settings.cycleLength||30);
-  $('#cfg').onsubmit=e=>{e.preventDefault();db.settings.currency=$('#currency').value;db.settings.cycleStart=Math.min(31,Math.max(1,num($('#cycleStart').value)||1));db.settings.cycleLength=num($('#cycleLength').value)||30;db.settings.daysOff=$('#daysOff').value.split(',').map(x=>x.trim()).filter(Boolean);save();toast('Configurações salvas.');render('config')};
-  $('#restore-all').onclick=async()=>{if(!confirm('ATENÇÃO: isso apagará receitas, despesas, dívidas, empréstimos, cartões, recorrentes, credores e livros caixa. O registro técnico de uso será preservado. Continuar?'))return;const usage=db.usage;db=defaultDB();if(usage!==undefined)db.usage=usage;save();try{await syncNow()}catch(e){console.error(e)}toast('RAQVOR restaurado.');render('dashboard')};
-}
-
-(function(){
- const oldBind=bindGlobal;
- bindGlobal=function(){oldBind();document.querySelectorAll('[data-toggle-dayoff]').forEach(b=>b.onclick=()=>toggleDayOff(b.dataset.toggleDayoff));document.querySelectorAll('[data-del-parcel]').forEach(b=>b.onclick=()=>deleteDebtInstallment(b.dataset.delParcel));document.querySelectorAll('[data-register-debt]').forEach(b=>b.onclick=registerDebtExpenseDialog);document.querySelectorAll('[data-new-creditor]').forEach(b=>b.onclick=()=>creditorForm());document.querySelectorAll('[data-creditor]').forEach(b=>b.onclick=()=>creditorDetail(b.dataset.creditor));};
-})();
-
-/* ============================================================
-   RAQVOR V2.17 — CALENDÁRIO FINANCEIRO FINAL
-   - Semana operacional: segunda → domingo
-   - Exibe somente registros (não cria uma grade por dia)
-   - Receita prevista reduz a necessidade de busca
-   - Receita recebida entra no caixa via currentBalance()
-   - Pagamento pode ser marcado como pago e perguntar se deve
-     consumir o valor disponível/caixa
-   - Realocação de pagamentos dentro do mês
-   - Folgas continuam editáveis em uma janela própria
-   ============================================================ */
-(function(){
-  const oldTxAmount=txAmount;
-  txAmount=function(x){
-    if(x?.type==='despesa' && x.status==='pago' && x.cashDeducted===false) return 0;
-    return oldTxAmount(x);
-  };
-
-  function rq17MonthDays(m){
-    const [y,mo]=m.split('-').map(Number); const last=new Date(y,mo,0,12); const out=[];
-    for(let i=1;i<=last.getDate();i++){const d=new Date(y,mo-1,i,12);out.push(ymd(d));}
-    return out;
-  }
-  function rq17Weeks(m){
-    const days=rq17MonthDays(m), set=new Set(days), out=[];
-    if(!days.length)return out;
-    let start=iso(days[0]); start.setDate(start.getDate()-((start.getDay()+6)%7));
-    const last=iso(days[days.length-1]);
-    while(start<=last){
-      const end=new Date(start);end.setDate(end.getDate()+6);
-      const inMonth=[];for(let d=new Date(start);d<=end;d.setDate(d.getDate()+1)){const k=ymd(d);if(set.has(k))inMonth.push(k)}
-      if(inMonth.length)out.push({start:inMonth[0],end:inMonth[inMonth.length-1],days:inMonth});
-      start=new Date(start);start.setDate(start.getDate()+7);
-    }
-    return out;
-  }
-  function rq17PendingPayments(rows){return rows.filter(x=>x.type==='despesa'&&x.status!=='pago');}
-  function rq17PendingRevenue(rows){return rows.filter(x=>x.type==='receita'&&x.status!=='pago');}
-  function rq17RecordHtml(x){
-    const isRec=x.type==='receita';
-    const status=x.status==='pago'?(isRec?'Recebida':'Paga'):(x.status==='atrasado'?'Atrasada':'Prevista');
-    return `<div class="calendar-record ${isRec?'record-revenue':'record-payment'}" data-calendar-record="${x.id}">
-      <div class="calendar-record-date"><b>${fmtDate(x.date)}</b><small>${esc(new Intl.DateTimeFormat('pt-BR',{weekday:'short'}).format(iso(x.date)).replace('.',''))}</small></div>
-      <div class="calendar-record-main"><strong>${esc(x.person||x.category|| (isRec?'Receita':'Pagamento'))}</strong><span>${esc(x.category||'')} ${x.installment?`• parcela ${x.installment}${x.installments?'/'+x.installments:''}`:''}</span></div>
-      <div class="calendar-record-value ${isRec?'positive':'negative'}">${isRec?'+':'−'} ${money(x.value)}</div>
-      <div class="calendar-record-status">${statusPill(x.status,x.priority)}</div>
-      <div class="calendar-record-actions">${!isRec&&x.status!=='pago'?`<button class="btn primary mini" data-calendar-pay="${x.id}">Marcar pago</button>`:''}<button class="btn secondary mini" data-calendar-move="${x.id}">Realocar</button><button class="btn secondary mini" data-edit="${x.id}">Editar</button></div>
-    </div>`;
-  }
-
-  calendar=function(m=calendarCursor||currentMonth()){
-    calendarCursor=m;
     const rows=(db.transactions||[]).filter(x=>monthKey(x.date)===m);
-    const payments=rq17PendingPayments(rows);
-    const pendingRevenue=rq17PendingRevenue(rows);
+    const payments=rows.filter(x=>x.type==='despesa'&&x.status!=='pago');
+    const revenues=rows.filter(x=>x.type==='receita');
+    const pendingRevenue=revenues.filter(x=>x.status!=='pago');
+    const receivedRevenue=revenues.filter(x=>x.status==='pago');
     const totalPay=payments.reduce((a,x)=>a+num(x.value),0);
-    const receivedRevenue=rows.filter(x=>x.type==='receita'&&x.status==='pago').reduce((a,x)=>a+num(x.value),0);
+    const plannedRevenue=pendingRevenue.reduce((a,x)=>a+num(x.value),0);
+    const received=receivedRevenue.reduce((a,x)=>a+num(x.value),0);
     const cash=Math.max(0,currentBalance());
-    /* Receita futura é uma fonte prevista; receita já recebida já está refletida no caixa. */
-    const available=cash+pendingRevenue.reduce((a,x)=>a+num(x.value),0);
-    const debt=Math.max(0,totalPay-available);
+    const debt=Math.max(0,totalPay-plannedRevenue-cash);
     const todayKey=today();
-    const monthDays=rq17MonthDays(m);
-    const activeDays=monthDays.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k));
+    const days=rq17MonthDays(m);
+    const activeDays=days.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k));
     const remaining=Math.max(0,activeDays.length);
     const daily=remaining?debt/remaining:0;
     const weeks=rq17Weeks(m);
-    const weeksHtml=weeks.map((w,wi)=>{
-      const items=rows.filter(x=>w.days.includes(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='despesa'? -1:1));
-      const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
+
+    const moneyClass=(v)=>v>0?'negative': 'positive';
+    const weekCard=weeks.map((w,wi)=>{
+      const items=rows.filter(x=>w.days.includes(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='despesa'?-1:1));
+      const pay=items.filter(x=>x.type==='despesa');
       const rec=items.filter(x=>x.type==='receita');
-      const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
+      const openPay=pay.filter(x=>x.status!=='pago');
+      const payTotal=openPay.reduce((a,x)=>a+num(x.value),0);
+      const paidPay=pay.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
       const recTotal=rec.reduce((a,x)=>a+num(x.value),0);
       const recPending=rec.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
+      const recReceived=rec.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
       const weekOff=w.days.filter(k=>(db.settings.daysOff||[]).includes(k)).length;
       const weekActive=w.days.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k)).length;
-      const weekNeed=Math.max(0,payTotal-recPending-(wi===0?cash:0));
+      const weekNeed=Math.max(0,payTotal-recPending);
       const weekDaily=weekActive?weekNeed/weekActive:0;
       const current=w.days.includes(todayKey);
-      return `<section class="finance-week ${current?'current':''}">
-        <div class="finance-week-head">
-          <div><span class="eyebrow">${current?'SEMANA ATUAL':'SEMANA '+(wi+1)}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div>
-          <div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Busca/dia</small><b>${money(weekDaily)}</b></div></div>
+      const status=payTotal===0?'Sem pagamentos pendentes':weekNeed===0?'Cobertura prevista':'A buscar';
+      return `<section class="calendar-week-card ${current?'is-current':''}">
+        <div class="calendar-week-card-head">
+          <div class="week-title-wrap"><span class="week-index">${current?'ATUAL':'SEMANA '+(wi+1)}</span><h3>${fmtDate(w.start)} <span>—</span> ${fmtDate(w.end)}</h3><small>${weekOff?weekOff+' folga(s) cadastrada(s)':'Sem folgas cadastradas'}</small></div>
+          <div class="week-status ${weekNeed?'attention':'ok'}">${status}</div>
         </div>
-        <div class="calendar-week-toolbar"><span>${items.length} registro(s) · ${weekOff} folga(s)</span><button class="btn secondary mini" data-calendar-folgas="${w.start}|${w.end}">Gerenciar folgas</button></div>
-        <div class="calendar-record-list">${items.length?items.map(rq17RecordHtml).join(''):'<div class="empty">Nenhum pagamento ou receita registrado nesta semana.</div>'}</div>
-        <div class="finance-week-footer"><div><small>Total a pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Receitas previstas</small><b class="positive">${money(recPending)}</b></div><div><small>Folgas</small><b>${weekOff}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b><span>${weekActive} dia(s) ativos</span></div></div>
+        <div class="week-kpis">
+          <div><small>A PAGAR</small><b class="negative">${money(payTotal)}</b></div>
+          <div><small>PAGO</small><b>${money(paidPay)}</b></div>
+          <div><small>RECEITAS</small><b class="positive">${money(recTotal)}</b></div>
+          <div><small>BUSCA / DIA</small><b>${money(weekDaily)}</b></div>
+        </div>
+        <div class="week-toolbar"><span>${items.length} lançamento(s)</span><button class="btn secondary mini" data-calendar-folgas="${w.start}|${w.end}">Gerenciar folgas</button></div>
+        <div class="calendar-record-list premium-record-list">
+          ${items.length?items.map(rq17RecordHtml).join(''):`<div class="calendar-empty-state"><strong>Nenhum pagamento ou receita nesta semana</strong><span>Os próximos lançamentos aparecerão aqui automaticamente.</span></div>`}
+        </div>
+        <div class="week-bottom"><div><span>Receitas previstas</span><b class="positive">${money(recPending)}</b></div><div><span>Recebido</span><b class="positive">${money(recReceived)}</b></div><div><span>Necessidade da semana</span><b class="${moneyClass(weekNeed)}">${money(weekNeed)}</b></div></div>
       </section>`;
     }).join('');
 
-    layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>Semanas de segunda a domingo. A página mostra somente pagamentos e receitas; os dias individuais ficam disponíveis apenas para administrar folgas.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div></div>
-      <div class="finance-summary-banner calendar-summary-v217"><div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>RECEITAS PREVISTAS</small><strong class="positive">${money(pendingRevenue.reduce((a,x)=>a+num(x.value),0))}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(daily)}</strong><span>${remaining} dia(s) ativos</span></div></div>
-      <div class="calendar-note"><b>Como funciona:</b> o total a pagar é reduzido pelo dinheiro disponível em caixa e pelas receitas ainda previstas. Quando uma receita é registrada como recebida, ela passa a compor o caixa e o calendário se recalcula automaticamente. Ao marcar um pagamento como pago, o RAQVOR pergunta se o valor deve ser deduzido do caixa disponível.</div>
-      <div class="finance-weeks">${weeksHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
+    layout('Calendário Financeiro',`<div class="calendar-v18-shell">
+      <div class="calendar-hero-v18">
+        <div><span class="eyebrow">PLANEJAMENTO FINANCEIRO</span><h2>Calendário Financeiro</h2><p>${monthName(m)} de ${yearKey(m)} · organize pagamentos e receitas por semana.</p></div>
+        <div class="calendar-month-selector"><button class="calendar-nav-btn" data-month-prev>‹</button><div><small>MÊS DE REFERÊNCIA</small><strong>${monthName(m)}</strong></div><button class="calendar-nav-btn" data-month-next>›</button></div>
+      </div>
+      <div class="calendar-main-kpis">
+        <div class="calendar-main-card cash"><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong><span>Disponível agora</span></div>
+        <div class="calendar-main-card pay"><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong><span>Compromissos em aberto</span></div>
+        <div class="calendar-main-card revenue"><small>RECEITAS PREVISTAS</small><strong class="positive">${money(plannedRevenue)}</strong><span>Entradas que ainda virão</span></div>
+        <div class="calendar-main-card balance"><small>SALDO A COBRIR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong><span>Após caixa + receitas</span></div>
+        <div class="calendar-main-card daily featured"><small>BUSCA DIÁRIA</small><strong>${money(daily)}</strong><span>${remaining} dia(s) ativo(s) no período</span></div>
+      </div>
+      <div class="calendar-rule-card"><div class="rule-icon">✓</div><div><strong>Como o RAQVOR calcula sua busca</strong><p>Total a pagar − caixa disponível − receitas previstas = saldo a cobrir. O saldo é dividido somente pelos dias ativos; folgas não entram no cálculo.</p></div></div>
+      <div class="calendar-section-heading"><div><span class="eyebrow">VISÃO SEMANAL</span><h3>Compromissos do mês</h3><p>Aqui aparecem somente pagamentos e receitas. Os dias individuais ficam restritos ao gerenciamento de folgas.</p></div><div class="calendar-month-total"><small>RECEITAS JÁ RECEBIDAS</small><b class="positive">${money(received)}</b></div></div>
+      <div class="calendar-weeks-v18">${weekCard||'<div class="calendar-empty-state"><strong>Nenhum lançamento no mês</strong><span>Cadastre pagamentos ou receitas para começar.</span></div>'}</div>
+    </div>`);
   };
 
   function openMoveModal(id){
