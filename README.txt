@@ -1,14 +1,8 @@
-RAQVOR V2.15 — pacote corrigido
+RAQVOR V2.16 — DESKTOP FINAL
 
-Correção desta rodada:
-- index.html Desktop e Mobile agora carregam os arquivos que realmente existem no pacote: styles.css e app.js.
-- Service Worker atualizado para v2.15 e app.js?v=2.15.0.
-- Corrige os erros 404 observados no GitHub Pages para styles_FINAL_2.15.css e app_FINAL_2.15.js.
+Substituir os arquivos dentro do repositório Gestao-RAQVOR-desktop.
+Dashboard não foi alterado deliberadamente.
 
-Aplicação:
-1. Substitua o conteúdo correspondente no repositório Gestao-RAQVOR-desktop e Gestao-RAQVOR-Mobile.
-2. Faça commit/push.
-3. No navegador, faça Ctrl+Shift+R para recarregar sem cache.
-4. Se o Service Worker antigo permanecer, DevTools > Application > Service Workers > Unregister e depois recarregue.
+Principais ajustes: calendário mensal em semanas segunda-domingo com folga por dia; visão de caixa e busca diária; dívidas com edição/exclusão e exclusão parcial de parcela; empréstimos com valor recebido, juros e modalidade; credores separados; recorrentes separados; restauração integral dos registros financeiros preservando usage; visual refinado.
 
-O SQL da versão 2.15 permanece no arquivo RAQVOR_V2_15_SUPABASE.sql.
+Após publicar: Ctrl+Shift+R. Se houver service worker antigo, Application > Service Workers > Unregister.
