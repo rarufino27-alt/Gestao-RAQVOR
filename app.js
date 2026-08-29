@@ -915,3 +915,128 @@ function config(){
  const oldBind=bindGlobal;
  bindGlobal=function(){oldBind();document.querySelectorAll('[data-toggle-dayoff]').forEach(b=>b.onclick=()=>toggleDayOff(b.dataset.toggleDayoff));document.querySelectorAll('[data-del-parcel]').forEach(b=>b.onclick=()=>deleteDebtInstallment(b.dataset.delParcel));document.querySelectorAll('[data-register-debt]').forEach(b=>b.onclick=registerDebtExpenseDialog);document.querySelectorAll('[data-new-creditor]').forEach(b=>b.onclick=()=>creditorForm());document.querySelectorAll('[data-creditor]').forEach(b=>b.onclick=()=>creditorDetail(b.dataset.creditor));};
 })();
+
+/* ============================================================
+   RAQVOR V2.17 — CALENDÁRIO FINANCEIRO FINAL
+   - Semana operacional: segunda → domingo
+   - Exibe somente registros (não cria uma grade por dia)
+   - Receita prevista reduz a necessidade de busca
+   - Receita recebida entra no caixa via currentBalance()
+   - Pagamento pode ser marcado como pago e perguntar se deve
+     consumir o valor disponível/caixa
+   - Realocação de pagamentos dentro do mês
+   - Folgas continuam editáveis em uma janela própria
+   ============================================================ */
+(function(){
+  const oldTxAmount=txAmount;
+  txAmount=function(x){
+    if(x?.type==='despesa' && x.status==='pago' && x.cashDeducted===false) return 0;
+    return oldTxAmount(x);
+  };
+
+  function rq17MonthDays(m){
+    const [y,mo]=m.split('-').map(Number); const last=new Date(y,mo,0,12); const out=[];
+    for(let i=1;i<=last.getDate();i++){const d=new Date(y,mo-1,i,12);out.push(ymd(d));}
+    return out;
+  }
+  function rq17Weeks(m){
+    const days=rq17MonthDays(m), set=new Set(days), out=[];
+    if(!days.length)return out;
+    let start=iso(days[0]); start.setDate(start.getDate()-((start.getDay()+6)%7));
+    const last=iso(days[days.length-1]);
+    while(start<=last){
+      const end=new Date(start);end.setDate(end.getDate()+6);
+      const inMonth=[];for(let d=new Date(start);d<=end;d.setDate(d.getDate()+1)){const k=ymd(d);if(set.has(k))inMonth.push(k)}
+      if(inMonth.length)out.push({start:inMonth[0],end:inMonth[inMonth.length-1],days:inMonth});
+      start=new Date(start);start.setDate(start.getDate()+7);
+    }
+    return out;
+  }
+  function rq17PendingPayments(rows){return rows.filter(x=>x.type==='despesa'&&x.status!=='pago');}
+  function rq17PendingRevenue(rows){return rows.filter(x=>x.type==='receita'&&x.status!=='pago');}
+  function rq17RecordHtml(x){
+    const isRec=x.type==='receita';
+    const status=x.status==='pago'?(isRec?'Recebida':'Paga'):(x.status==='atrasado'?'Atrasada':'Prevista');
+    return `<div class="calendar-record ${isRec?'record-revenue':'record-payment'}" data-calendar-record="${x.id}">
+      <div class="calendar-record-date"><b>${fmtDate(x.date)}</b><small>${esc(new Intl.DateTimeFormat('pt-BR',{weekday:'short'}).format(iso(x.date)).replace('.',''))}</small></div>
+      <div class="calendar-record-main"><strong>${esc(x.person||x.category|| (isRec?'Receita':'Pagamento'))}</strong><span>${esc(x.category||'')} ${x.installment?`• parcela ${x.installment}${x.installments?'/'+x.installments:''}`:''}</span></div>
+      <div class="calendar-record-value ${isRec?'positive':'negative'}">${isRec?'+':'−'} ${money(x.value)}</div>
+      <div class="calendar-record-status">${statusPill(x.status,x.priority)}</div>
+      <div class="calendar-record-actions">${!isRec&&x.status!=='pago'?`<button class="btn primary mini" data-calendar-pay="${x.id}">Marcar pago</button>`:''}<button class="btn secondary mini" data-calendar-move="${x.id}">Realocar</button><button class="btn secondary mini" data-edit="${x.id}">Editar</button></div>
+    </div>`;
+  }
+
+  calendar=function(m=calendarCursor||currentMonth()){
+    calendarCursor=m;
+    const rows=(db.transactions||[]).filter(x=>monthKey(x.date)===m);
+    const payments=rq17PendingPayments(rows);
+    const pendingRevenue=rq17PendingRevenue(rows);
+    const totalPay=payments.reduce((a,x)=>a+num(x.value),0);
+    const receivedRevenue=rows.filter(x=>x.type==='receita'&&x.status==='pago').reduce((a,x)=>a+num(x.value),0);
+    const cash=Math.max(0,currentBalance());
+    /* Receita futura é uma fonte prevista; receita já recebida já está refletida no caixa. */
+    const available=cash+pendingRevenue.reduce((a,x)=>a+num(x.value),0);
+    const debt=Math.max(0,totalPay-available);
+    const todayKey=today();
+    const monthDays=rq17MonthDays(m);
+    const activeDays=monthDays.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k));
+    const remaining=Math.max(0,activeDays.length);
+    const daily=remaining?debt/remaining:0;
+    const weeks=rq17Weeks(m);
+    const weeksHtml=weeks.map((w,wi)=>{
+      const items=rows.filter(x=>w.days.includes(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='despesa'? -1:1));
+      const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
+      const rec=items.filter(x=>x.type==='receita');
+      const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
+      const recTotal=rec.reduce((a,x)=>a+num(x.value),0);
+      const recPending=rec.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
+      const weekOff=w.days.filter(k=>(db.settings.daysOff||[]).includes(k)).length;
+      const weekActive=w.days.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k)).length;
+      const weekNeed=Math.max(0,payTotal-recPending-(wi===0?cash:0));
+      const weekDaily=weekActive?weekNeed/weekActive:0;
+      const current=w.days.includes(todayKey);
+      return `<section class="finance-week ${current?'current':''}">
+        <div class="finance-week-head">
+          <div><span class="eyebrow">${current?'SEMANA ATUAL':'SEMANA '+(wi+1)}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div>
+          <div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Busca/dia</small><b>${money(weekDaily)}</b></div></div>
+        </div>
+        <div class="calendar-week-toolbar"><span>${items.length} registro(s) · ${weekOff} folga(s)</span><button class="btn secondary mini" data-calendar-folgas="${w.start}|${w.end}">Gerenciar folgas</button></div>
+        <div class="calendar-record-list">${items.length?items.map(rq17RecordHtml).join(''):'<div class="empty">Nenhum pagamento ou receita registrado nesta semana.</div>'}</div>
+        <div class="finance-week-footer"><div><small>Total a pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Receitas previstas</small><b class="positive">${money(recPending)}</b></div><div><small>Folgas</small><b>${weekOff}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b><span>${weekActive} dia(s) ativos</span></div></div>
+      </section>`;
+    }).join('');
+
+    layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>Semanas de segunda a domingo. A página mostra somente pagamentos e receitas; os dias individuais ficam disponíveis apenas para administrar folgas.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div></div>
+      <div class="finance-summary-banner calendar-summary-v217"><div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>RECEITAS PREVISTAS</small><strong class="positive">${money(pendingRevenue.reduce((a,x)=>a+num(x.value),0))}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(daily)}</strong><span>${remaining} dia(s) ativos</span></div></div>
+      <div class="calendar-note"><b>Como funciona:</b> o total a pagar é reduzido pelo dinheiro disponível em caixa e pelas receitas ainda previstas. Quando uma receita é registrada como recebida, ela passa a compor o caixa e o calendário se recalcula automaticamente. Ao marcar um pagamento como pago, o RAQVOR pergunta se o valor deve ser deduzido do caixa disponível.</div>
+      <div class="finance-weeks">${weeksHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
+  };
+
+  function openMoveModal(id){
+    const x=db.transactions.find(t=>t.id===id); if(!x)return;
+    const month=calendarCursor||currentMonth();
+    const html=`<div class="modal-overlay open" id="rq17-move-modal"><div class="modal-box calendar-action-modal"><button class="modal-close" id="rq17-move-close">×</button><span class="eyebrow">REALOCAR REGISTRO</span><h2>${x.type==='receita'?'Receita':'Pagamento'}</h2><p>${esc(x.person||x.category||'Registro')} · ${money(x.value)}</p><form id="rq17-move-form" class="form"><div class="field"><label>Nova data dentro de ${monthName(month)}</label><input id="rq17-move-date" type="date" value="${x.date}" min="${month}-01" max="${month}-${String(new Date(iso(month+'-01').getFullYear(),iso(month+'-01').getMonth()+1,0).getDate()).padStart(2,'0')}" required></div><div class="actions full"><button type="button" class="btn secondary" id="rq17-move-cancel">Cancelar</button><button class="btn primary">Salvar nova data</button></div></form></div></div>`;
+    document.body.insertAdjacentHTML('beforeend',html);const close=()=>$('#rq17-move-modal')?.remove();$('#rq17-move-close').onclick=close;$('#rq17-move-cancel').onclick=close;
+    $('#rq17-move-form').onsubmit=e=>{e.preventDefault();const d=$('#rq17-move-date').value;if(monthKey(d)!==month){toast('A realocação deve permanecer no mês selecionado.');return}x.date=d;x.weekAssigned=weekOf(d);x.manuallyRelocated=true;save();close();toast('Registro realocado.');calendar(month)};
+  }
+  function openPayModal(id){
+    const x=db.transactions.find(t=>t.id===id);if(!x||x.status==='pago')return;
+    const html=`<div class="modal-overlay open" id="rq17-pay-modal"><div class="modal-box calendar-action-modal"><button class="modal-close" id="rq17-pay-close">×</button><span class="eyebrow">CONFIRMAR PAGAMENTO</span><h2>Marcar como pago?</h2><p>${esc(x.person||x.category||'Pagamento')} · <b>${money(x.value)}</b></p><p class="modal-question">Deseja também deduzir este valor do dinheiro disponível/caixa?</p><div class="actions"><button class="btn secondary" id="rq17-pay-no">Não, só marcar como pago</button><button class="btn primary" id="rq17-pay-yes">Sim, deduzir do caixa</button></div></div></div>`;
+    document.body.insertAdjacentHTML('beforeend',html);const close=()=>$('#rq17-pay-modal')?.remove();$('#rq17-pay-close').onclick=close;
+    const finish=(deduct)=>{x.status='pago';x.cashDeducted=deduct; x.paidAt=new Date().toISOString(); save(); close(); toast(deduct?'Pagamento marcado como pago e deduzido do caixa.':'Pagamento marcado como pago sem deduzir do caixa.'); calendar(calendarCursor||currentMonth())};
+    $('#rq17-pay-no').onclick=()=>finish(false);$('#rq17-pay-yes').onclick=()=>finish(true);
+  }
+  function openFolgasModal(range){
+    const [start,end]=range.split('|'), ds=[];let d=iso(start),e=iso(end);while(d<=e){ds.push(ymd(d));d.setDate(d.getDate()+1)}
+    const html=`<div class="modal-overlay open" id="rq17-off-modal"><div class="modal-box calendar-action-modal"><button class="modal-close" id="rq17-off-close">×</button><span class="eyebrow">FOLGAS DA SEMANA</span><h2>Escolha os dias sem trabalho</h2><p>Somente as folgas marcadas deixam de entrar no cálculo da busca diária.</p><div class="calendar-off-list">${ds.map(k=>`<label class="off-check"><input type="checkbox" data-off-check="${k}" ${(db.settings.daysOff||[]).includes(k)?'checked':''}><span>${new Intl.DateTimeFormat('pt-BR',{weekday:'long'}).format(iso(k))}</span><b>${fmtDate(k)}</b></label>`).join('')}</div><div class="actions"><button class="btn primary" id="rq17-off-save">Salvar folgas</button></div></div></div>`;
+    document.body.insertAdjacentHTML('beforeend',html);const close=()=>$('#rq17-off-modal')?.remove();$('#rq17-off-close').onclick=close;
+    $('#rq17-off-save').onclick=()=>{db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];ds.forEach(k=>{const checked=document.querySelector(`[data-off-check="${k}"]`)?.checked;if(checked&&!db.settings.daysOff.includes(k))db.settings.daysOff.push(k);if(!checked)db.settings.daysOff=db.settings.daysOff.filter(x=>x!==k)});save();close();toast('Folgas atualizadas.');calendar(calendarCursor||currentMonth())};
+  }
+
+  const prevBind=bindGlobal;
+  bindGlobal=function(){prevBind();
+    document.querySelectorAll('[data-calendar-pay]').forEach(b=>b.onclick=()=>openPayModal(b.dataset.calendarPay));
+    document.querySelectorAll('[data-calendar-move]').forEach(b=>b.onclick=()=>openMoveModal(b.dataset.calendarMove));
+    document.querySelectorAll('[data-calendar-folgas]').forEach(b=>b.onclick=()=>openFolgasModal(b.dataset.calendarFolgas));
+  };
+})();
