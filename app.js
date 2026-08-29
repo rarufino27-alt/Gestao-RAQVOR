@@ -829,47 +829,70 @@ function calendar(m=calendarCursor||currentMonth()){
   const monthItems=db.transactions.filter(x=>monthKey(x.date)===m);
   const pendingPay=monthItems.filter(x=>x.type==='despesa'&&x.status!=='pago');
   const totalPay=pendingPay.reduce((a,x)=>a+num(x.value),0);
-  const cash=Math.max(0,currentBalance());
-  const debt=Math.max(0,totalPay-cash);
+  const cash=currentBalance();
+  const plannedReceipts=monthItems.filter(x=>x.type==='receita'&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
+  const receivedMonth=monthItems.filter(x=>x.type==='receita'&&x.status==='pago').reduce((a,x)=>a+num(x.value),0);
+  const debt=Math.max(0,totalPay-Math.max(0,cash)-plannedReceipts);
+  const offDays=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];
   let remainingDays=0;
-  const start=monthKey(first)===currentMonth()?iso(todayKey):first;
-  for(let d=new Date(start);d<=last;d.setDate(d.getDate()+1)){
-    const k=ymd(d); if(!db.settings.daysOff.includes(k)) remainingDays++;
+  const calcStart=monthKey(first)===currentMonth()?iso(todayKey):first;
+  for(let d=new Date(calcStart);d<=last;d.setDate(d.getDate()+1)){
+    const k=ymd(d); if(!offDays.includes(k)) remainingDays++;
   }
   remainingDays=Math.max(1,remainingDays);
   const dailyNeed=debt/remainingDays;
-  const weeks=financialWeekRanges(m);
-  let carryCash=cash;
+
+  // Semanas do calendário: segunda-feira a domingo, recortadas ao mês corrente.
+  const weeks=[]; let ws=new Date(first);
+  while(ws.getDay()!==1) ws.setDate(ws.getDate()-1);
+  while(ws<=last){
+    const we=new Date(ws); we.setDate(we.getDate()+6);
+    const start=ws<first?new Date(first):new Date(ws);
+    const end=we>last?new Date(last):new Date(we);
+    weeks.push({start:ymd(start),end:ymd(end),days:dateRange(start,end)});
+    ws=new Date(ws); ws.setDate(ws.getDate()+7);
+  }
+
   const weekHtml=weeks.map((w,idx)=>{
-    const items=monthItems.filter(x=>w.days.includes(x.date));
-    const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
-    const rec=items.filter(x=>x.type==='receita');
+    const items=monthItems.filter(x=>x.date>=w.start&&x.date<=w.end);
+    const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago').sort((a,b)=>a.date.localeCompare(b.date));
+    const rec=items.filter(x=>x.type==='receita').sort((a,b)=>a.date.localeCompare(b.date));
     const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
-    const received=rec.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
-    const planned=rec.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
-    const weekDebt=Math.max(0,payTotal-carryCash-received);
-    const active=w.days.filter(d=>d>=todayKey&&!db.settings.daysOff.includes(d)).length||1;
-    const daily=weekDebt/active;
-    const before=carryCash;
-    carryCash=Math.max(0,before+received-payTotal);
-    const groups=groupCreditor(pay);
-    const dayButtons=w.days.map(d=>{
-      const off=db.settings.daysOff.includes(d);
-      const isToday=d===todayKey;
-      const count=monthItems.filter(x=>x.date===d).length;
-      return `<button class="calendar-day-chip ${off?'off':''} ${isToday?'today':''}" data-toggle-dayoff="${d}" title="${off?'Remover folga':'Marcar como folga'}"><span>${new Intl.DateTimeFormat('pt-BR',{weekday:'short'}).format(iso(d)).replace('.','')}</span><b>${fmtDate(d).slice(0,5)}</b>${count?`<em>${count}</em>`:''}</button>`;
-    }).join('');
+    const recPlanned=rec.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
+    const recReceived=rec.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
+    const available=Math.max(0,cash);
+    const weekNeed=Math.max(0,payTotal-available-recReceived-recPlanned);
+    const activeDays=w.days.filter(d=>d>=todayKey&&!offDays.includes(d)).length||w.days.filter(d=>!offDays.includes(d)).length||1;
+    const weekDaily=weekNeed/Math.max(1,activeDays);
+    const rows=[...pay.map(x=>`<div class="calendar-ledger-row"><div class="ledger-value negative">${money(x.value)}</div><div class="ledger-desc"><b>${esc(x.person||x.category||'Pagamento')}</b><span>${fmtDate(x.date)}${x.category&&x.person?` • ${esc(x.category)}`:''}</span></div><div class="ledger-status"><span class="calendar-status ${x.status==='pago'?'paid':'pending'}">${x.status==='pago'?'Pago':'Previsto'}</span></div><div class="ledger-actions"><button class="btn primary mini" data-cal-paid="${x.id}">Marcar como pago</button><button class="btn secondary mini" data-cal-move="${x.id}">Realocar</button><button class="btn secondary mini" data-edit="${x.id}">Editar</button></div></div>`),...rec.map(x=>`<div class="calendar-ledger-row revenue-row"><div class="ledger-value positive">+ ${money(x.value)}</div><div class="ledger-desc"><b>${esc(x.person||x.category||'Receita')}</b><span>${fmtDate(x.date)}${x.category&&x.person?` • ${esc(x.category)}`:''}</span></div><div class="ledger-status"><span class="calendar-status ${x.status==='pago'?'paid':'pending'}">${x.status==='pago'?'Recebido':'Prevista'}</span></div><div class="ledger-actions"><button class="btn secondary mini" data-cal-move="${x.id}">Realocar</button><button class="btn secondary mini" data-edit="${x.id}">Editar</button></div></div>`)].join('');
     return `<section class="finance-week ${w.days.includes(todayKey)?'current':''}">
-      <div class="finance-week-head"><div><span class="eyebrow">SEMANA ${idx+1}${w.days.includes(todayKey)?' • ATUAL':''}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div><div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(received+planned)}</b></div><div><small>Busca diária</small><b>${money(daily)}</b></div></div></div>
-      <div class="calendar-day-strip">${dayButtons}</div>
-      <div class="finance-week-body">${groups.length?groups.map(g=>`<div class="creditor-line"><div class="creditor-main"><b>${esc(g.name)}</b><span>${g.items.map(x=>`${fmtDate(x.date)} • ${esc(x.category||'pagamento')}`).join(' · ')}</span></div><strong class="negative">${money(g.total)}</strong></div>`).join(''):`<div class="empty">Nenhum pagamento previsto nesta semana.</div>`}<div class="week-revenue"><span><b>Receitas</b><small>${received?`Recebidas ${money(received)}`:'Nenhuma recebida'}${planned?` • previstas ${money(planned)}`:''}</small></span><strong class="positive">+ ${money(received)}</strong></div></div>
-      <div class="finance-week-footer"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(received+planned)}</b></div><div><small>Caixa após semana</small><b>${money(carryCash)}</b></div><div><small>Saldo da semana</small><b class="${weekDebt?'negative':'positive'}">${money(weekDebt)}</b></div><div><small>Folgas</small><b>${w.days.filter(d=>db.settings.daysOff.includes(d)).length}</b></div></div>
+      <div class="finance-week-head"><div><span class="eyebrow">SEMANA ${idx+1}${w.days.includes(todayKey)?' • ATUAL':''}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div><div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recPlanned+recReceived)}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b></div></div></div>
+      <div class="calendar-ledger"><div class="calendar-ledger-head"><span>VALOR</span><span>DESCRIÇÃO</span><span>STATUS</span><span>AÇÃO</span></div>${rows||'<div class="calendar-empty">Nenhum pagamento ou receita registrado nesta semana.</div>'}</div>
+      <div class="finance-week-footer"><div><small>Total a pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recPlanned)}</b></div><div><small>Recebido</small><b class="positive">${money(recReceived)}</b></div><div><small>Busca diária</small><b class="${weekNeed?'negative':'positive'}">${money(weekDaily)}</b></div><div><small>Folgas</small><b>${w.days.filter(d=>offDays.includes(d)).length}</b></div></div>
     </section>`;
   }).join('');
-  layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>O mês é dividido em semanas de <b>segunda a domingo</b>. Clique em um dia para marcar ou retirar uma folga. A busca diária é recalculada automaticamente.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div></div>
-  <div class="finance-summary-banner"><div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(dailyNeed)}</strong><span>${remainingDays} dias úteis para busca</span></div></div>
-  <div class="calendar-note"><b>Regra:</b> domingo a domingo, sem folga por padrão. Um dia marcado como folga não entra na divisão da busca. Abaixo estão todos os pagamentos previstos do mês agrupados por semana e credor.</div>
+
+  layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>Pagamentos e receitas organizados por semanas de <b>segunda a domingo</b>. Use as ações de cada lançamento para atualizar a programação.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div></div>
+  <div class="finance-summary-banner"><div><small>EM CAIXA</small><strong class="${cash>=0?'positive':'negative'}">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div><small>ENTRADAS NÃO RECEBIDAS</small><strong class="positive">${money(plannedReceipts)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(dailyNeed)}</strong><span>${remainingDays} dias disponíveis para busca</span></div></div>
+  <div class="calendar-note"><b>Regra:</b> o calendário é dividido de segunda a domingo. Um dia só deixa de participar da busca quando for marcado como folga. O valor da busca é recalculado conforme caixa, receitas e pagamentos.</div>
   <div class="finance-weeks">${weekHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
+
+  document.querySelectorAll('[data-cal-paid]').forEach(btn=>btn.onclick=()=>{
+    const tx=db.transactions.find(x=>x.id===btn.dataset.calPaid); if(!tx)return;
+    if(!confirm(`Marcar ${money(tx.value)} como pago e deduzir do caixa?`))return;
+    tx.status='pago'; save(); toast('Pagamento marcado como pago e deduzido do caixa.'); calendar(calendarCursor);
+  });
+  document.querySelectorAll('[data-cal-move]').forEach(btn=>btn.onclick=()=>{
+    const tx=db.transactions.find(x=>x.id===btn.dataset.calMove); if(!tx)return;
+    const options=weeks.map((w,i)=>`${i+1}: ${fmtDate(w.start)} até ${fmtDate(w.end)}`).join('\n');
+    const choice=prompt(`Escolha a semana para realocar:\n\n${options}\n\nDigite o número da semana:`);
+    const n=Number(choice); if(!Number.isInteger(n)||n<1||n>weeks.length)return;
+    const target=weeks[n-1];
+    const original=iso(tx.date); const day=original.getDay();
+    let newDate=iso(target.start); newDate.setDate(newDate.getDate()+Math.min(Math.max(day-1,0),6));
+    if(newDate>iso(target.end))newDate=iso(target.end);
+    tx.date=ymd(newDate); tx.weekAssigned=weekOf(tx.date); save(); toast(`Lançamento realocado para ${fmtDate(tx.date)}.`); calendar(calendarCursor);
+  });
 }
 function deleteDebtInstallment(txId){
   const tx=db.transactions.find(x=>x.id===txId); if(!tx)return;
@@ -969,98 +992,47 @@ function config(){
   calendar=function(m=calendarCursor||currentMonth()){
     calendarCursor=m;
     const rows=(db.transactions||[]).filter(x=>monthKey(x.date)===m);
-    const pendingPay=rows.filter(x=>x.type==='despesa'&&x.status!=='pago');
-    const pendingRec=rows.filter(x=>x.type==='receita'&&x.status!=='pago');
-    const receivedRec=rows.filter(x=>x.type==='receita'&&x.status==='pago');
-    const totalPay=pendingPay.reduce((a,x)=>a+num(x.value),0);
-    const totalPendingRec=pendingRec.reduce((a,x)=>a+num(x.value),0);
-    const totalReceivedRec=receivedRec.reduce((a,x)=>a+num(x.value),0);
+    const payments=rq17PendingPayments(rows);
+    const pendingRevenue=rq17PendingRevenue(rows);
+    const totalPay=payments.reduce((a,x)=>a+num(x.value),0);
+    const receivedRevenue=rows.filter(x=>x.type==='receita'&&x.status==='pago').reduce((a,x)=>a+num(x.value),0);
     const cash=Math.max(0,currentBalance());
-    const debt=Math.max(0,totalPay-cash-totalPendingRec);
+    /* Receita futura é uma fonte prevista; receita já recebida já está refletida no caixa. */
+    const available=cash+pendingRevenue.reduce((a,x)=>a+num(x.value),0);
+    const debt=Math.max(0,totalPay-available);
     const todayKey=today();
     const monthDays=rq17MonthDays(m);
     const activeDays=monthDays.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k));
-    const remaining=Math.max(1,activeDays.length);
-    const daily=Math.max(0,debt)/remaining;
+    const remaining=Math.max(0,activeDays.length);
+    const daily=remaining?debt/remaining:0;
     const weeks=rq17Weeks(m);
-
-    const recordHtml=(x)=>{
-      const isRec=x.type==='receita';
-      const status=x.status==='pago'?(isRec?'Recebida':'Paga'):(x.status==='atrasado'?'Atrasada':'Prevista');
-      return `<div class="calendar-row ${isRec?'calendar-row-revenue':'calendar-row-payment'}" data-calendar-record="${x.id}">
-        <div class="calendar-row-value ${isRec?'positive':'negative'}">${isRec?'+':'−'} ${money(x.value)}</div>
-        <div class="calendar-row-description">
-          <strong>${esc(x.person||x.category||(isRec?'Receita':'Pagamento'))}</strong>
-          <span>${esc(x.category||'')}${x.installment?` · parcela ${x.installment}${x.installments?'/'+x.installments:''}`:''}</span>
-        </div>
-        <div class="calendar-row-date">${fmtDate(x.date)}</div>
-        <div class="calendar-row-status">${status}</div>
-        <div class="calendar-row-actions">
-          ${!isRec&&x.status!=='pago'?`<button class="btn primary mini" data-calendar-pay="${x.id}">Marcar como pago</button>`:''}
-          <button class="btn secondary mini" data-calendar-move="${x.id}">Realocar</button>
-          <button class="btn secondary mini" data-edit="${x.id}">Editar</button>
-        </div>
-      </div>`;
-    };
-
     const weeksHtml=weeks.map((w,wi)=>{
-      const items=rows.filter(x=>w.days.includes(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='despesa'?-1:1));
+      const items=rows.filter(x=>w.days.includes(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='despesa'? -1:1));
       const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
       const rec=items.filter(x=>x.type==='receita');
       const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
-      const received=rec.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
+      const recTotal=rec.reduce((a,x)=>a+num(x.value),0);
       const recPending=rec.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);
       const weekOff=w.days.filter(k=>(db.settings.daysOff||[]).includes(k)).length;
       const weekActive=w.days.filter(k=>(m!==currentMonth()||k>=todayKey)&&!(db.settings.daysOff||[]).includes(k)).length;
-      const weekBalance=Math.max(0,payTotal-received-recPending);
-      const weekDaily=weekActive?weekBalance/weekActive:0;
-      const isCurrent=w.days.includes(todayKey);
-
-      return `<section class="finance-week ${isCurrent?'current':''}">
-        <div class="finance-week-head calendar-week-head-v218">
-          <div><span class="eyebrow">${isCurrent?'SEMANA ATUAL':'SEMANA '+(wi+1)}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div>
-          <div class="week-head-metrics">
-            <div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div>
-            <div><small>Receitas</small><b class="positive">${money(recPending+received)}</b></div>
-            <div><small>Busca diária</small><b>${money(weekDaily)}</b></div>
-          </div>
+      const weekNeed=Math.max(0,payTotal-recPending-(wi===0?cash:0));
+      const weekDaily=weekActive?weekNeed/weekActive:0;
+      const current=w.days.includes(todayKey);
+      return `<section class="finance-week ${current?'current':''}">
+        <div class="finance-week-head">
+          <div><span class="eyebrow">${current?'SEMANA ATUAL':'SEMANA '+(wi+1)}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div>
+          <div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Busca/dia</small><b>${money(weekDaily)}</b></div></div>
         </div>
-        <div class="calendar-table-head">
-          <span>VALOR</span><span>DESCRIÇÃO</span><span>DATA</span><span>STATUS</span><span>AÇÃO</span>
-        </div>
-        <div class="calendar-record-list calendar-record-table">
-          ${items.length?items.map(recordHtml).join(''):'<div class="calendar-empty-row">Nenhum pagamento ou receita registrado nesta semana.</div>'}
-        </div>
-        <div class="calendar-week-totals">
-          <div><span>Total a pagar</span><strong class="negative">${money(payTotal)}</strong></div>
-          <div><span>Receitas</span><strong class="positive">${money(recPending+received)}</strong></div>
-          <div><span>Recebido</span><strong class="positive">${money(received)}</strong></div>
-          <div><span>Busca diária (semana)</span><strong>${money(weekDaily)}</strong></div>
-          <div><span>Folgas</span><strong>${weekOff}</strong></div>
-        </div>
-        <div class="calendar-week-toolbar calendar-week-toolbar-v218">
-          <span>${items.length} registro(s)</span>
-          <button class="btn secondary mini" data-calendar-folgas="${w.start}|${w.end}">Gerenciar folgas</button>
-        </div>
+        <div class="calendar-week-toolbar"><span>${items.length} registro(s) · ${weekOff} folga(s)</span><button class="btn secondary mini" data-calendar-folgas="${w.start}|${w.end}">Gerenciar folgas</button></div>
+        <div class="calendar-record-list">${items.length?items.map(rq17RecordHtml).join(''):'<div class="empty">Nenhum pagamento ou receita registrado nesta semana.</div>'}</div>
+        <div class="finance-week-footer"><div><small>Total a pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Receitas previstas</small><b class="positive">${money(recPending)}</b></div><div><small>Folgas</small><b>${weekOff}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b><span>${weekActive} dia(s) ativos</span></div></div>
       </section>`;
     }).join('');
 
-    layout('Calendário Financeiro',`
-      <div class="page-intro calendar-intro">
-        <div><span class="eyebrow">FLUXO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2>
-        <p>Pagamentos e receitas organizados por semana. Os lançamentos podem ser pagos, editados ou realocados dentro do mês.</p></div>
-        <div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div>
-      </div>
-      <div class="finance-summary-banner calendar-summary-v217">
-        <div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div>
-        <div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div>
-        <div><small>RECEITAS PREVISTAS</small><strong class="positive">${money(totalPendingRec)}</strong></div>
-        <div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div>
-        <div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(daily)}</strong><span>${remaining} dia(s) ativos</span></div>
-      </div>
-      <div class="calendar-note"><b>Como funciona:</b> a busca diária considera o saldo ainda necessário, descontando o caixa disponível e as receitas previstas. Receitas recebidas entram no caixa. Pagamentos marcados como pagos podem ou não ser deduzidos do caixa, conforme sua confirmação.</div>
-      <div class="finance-weeks">${weeksHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>
-    `);
+    layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>Semanas de segunda a domingo. A página mostra somente pagamentos e receitas; os dias individuais ficam disponíveis apenas para administrar folgas.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(m)}</b><button class="btn secondary" data-month-next>›</button></div></div>
+      <div class="finance-summary-banner calendar-summary-v217"><div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>RECEITAS PREVISTAS</small><strong class="positive">${money(pendingRevenue.reduce((a,x)=>a+num(x.value),0))}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(daily)}</strong><span>${remaining} dia(s) ativos</span></div></div>
+      <div class="calendar-note"><b>Como funciona:</b> o total a pagar é reduzido pelo dinheiro disponível em caixa e pelas receitas ainda previstas. Quando uma receita é registrada como recebida, ela passa a compor o caixa e o calendário se recalcula automaticamente. Ao marcar um pagamento como pago, o RAQVOR pergunta se o valor deve ser deduzido do caixa disponível.</div>
+      <div class="finance-weeks">${weeksHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
   };
 
   function openMoveModal(id){
