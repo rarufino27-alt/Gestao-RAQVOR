@@ -2,16 +2,18 @@ let KEY='finance_nexora_v1';
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const $=s=>document.querySelector(s);
-const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(n)||0);
+function money(n){const c=(db?.settings?.currency||'BRL');return new Intl.NumberFormat('pt-BR',{style:'currency',currency:c==='USD'?'USD':c==='EUR'?'EUR':'BRL'}).format(Number(n)||0)}
 const num=n=>Number(n)||0;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const iso=(d)=>{if(d instanceof Date)return new Date(d.getFullYear(),d.getMonth(),d.getDate(),12);if(!d)return new Date(NaN);const s=String(d).slice(0,10);return new Date(`${s}T12:00:00`)};
-function defaultDB(){return{balance:0,transactions:[],debts:[],cards:[],loans:[],recurring:[],cashbooks:[],categories:{receita:['Salário','Trabalho','Freelance','Investimentos','Outros'],despesa:['Moradia','Alimentação','Transporte','Saúde','Educação','Lazer','Assinaturas','Cartões','Empréstimos','Impostos','Outros']},settings:{theme:'light',project:'Gestão financeira NEXORA',weekMode:'seg-sex'}}}
+function defaultDB(){return{balance:0,transactions:[],debts:[],cards:[],loans:[],recurring:[],cashbooks:[],creditors:[],categories:{receita:['Salário','Trabalho','Freelance','Investimentos','Outros'],despesa:['Moradia','Alimentação','Transporte','Saúde','Educação','Lazer','Assinaturas','Cartões','Empréstimos','Impostos','Outros']},settings:{theme:'light',project:'RAQVOR',weekMode:'seg-sex',currency:'BRL',cycleStart:1,cycleLength:30,daysOff:[]}}}
 let db=(()=>{try{return JSON.parse(localStorage.getItem(KEY))||defaultDB()}catch{return defaultDB()}})();
 const SUPABASE_URL='https://zowmlsusgnzqskuplxcu.supabase.co';
 const SUPABASE_KEY='sb_publishable_vkoEbQBCeSDsoFRZxJ4VoA_gVWhQf5M';
 let supabaseClient=null;
 let supabaseWorkspaceId=null;
+let currentUser=null;
+let currentProfile=null;
 let syncTimer=null;
 let syncInProgress=false;
 let syncReady=false;
@@ -30,6 +32,7 @@ function normalizeRemoteState(state){
   out.loans=Array.isArray(out.loans)?out.loans:[];
   out.recurring=Array.isArray(out.recurring)?out.recurring:[];
   out.cashbooks=Array.isArray(out.cashbooks)?out.cashbooks:[];
+  out.creditors=Array.isArray(out.creditors)?out.creditors:[];
   out.cashbooks.forEach(c=>{c.entries=Array.isArray(c.entries)?c.entries:[]});
   out.settings.daysOff=Array.isArray(out.settings.daysOff)?out.settings.daysOff:[];
   return out;
@@ -55,7 +58,7 @@ async function pullRemoteState({force=false}={}){
 function subscribeRealtime(){
   if(!supabaseClient||!supabaseWorkspaceId)return;
   if(realtimeChannel){try{supabaseClient.removeChannel(realtimeChannel)}catch{}}
-  realtimeChannel=supabaseClient.channel('nexora-app-state-'+supabaseWorkspaceId)
+  realtimeChannel=supabaseClient.channel('raquor-app-state-'+supabaseWorkspaceId)
     .on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:`workspace_id=eq.${supabaseWorkspaceId}`},payload=>{
       const row=payload.new||null;
       if(!row||!row.state)return;
@@ -64,12 +67,12 @@ function subscribeRealtime(){
       if(!lastRemoteUpdatedAt || remoteTime>=lastRemoteUpdatedAt){
         applyRemoteState(row.state,remoteTime);
         syncDirty=false;
-        setSyncStatus('V1.15 • Supabase sincronizado',true);
+        setSyncStatus('RAQVOR • Supabase sincronizado',true);
         render(view);
       }
     })
     .subscribe(status=>{
-      if(status==='SUBSCRIBED')setSyncStatus('V1.15 • Supabase conectado',true);
+      if(status==='SUBSCRIBED')setSyncStatus('RAQVOR • Supabase conectado',true);
     });
 }
 function normalizePhone(raw){
@@ -92,7 +95,7 @@ function showAuth(mode='login',message=''){
   let box=document.querySelector('#auth-screen');
   if(!box){box=document.createElement('section');box.id='auth-screen';document.body.prepend(box)}
   const isReg=mode==='register';
-  box.innerHTML=`<div class="auth-shell"><div class="auth-brand"><img src="./assets/nexora-finance-logo.png" alt="Gestão financeira NEXORA"><span>GESTÃO FINANCEIRA NEXORA</span></div><div class="auth-card"><div class="auth-kicker">${isReg?'COMECE SEU CONTROLE':'BEM-VINDO DE VOLTA'}</div><h1>${isReg?'Criar sua conta':'Entrar no NEXORA'}</h1><p class="auth-sub">${isReg?'Cadastre seu e-mail, telefone e crie sua senha. O telefone ficará vinculado ao seu perfil.':'Acesse suas finanças em qualquer dispositivo.'}</p>${message?`<div class="auth-alert">${esc(message)}</div>`:''}<form id="auth-form" class="auth-form">${isReg?`<label>Nome completo<input id="auth-name" autocomplete="name" required placeholder="Seu nome"></label>`:''}<label>E-mail<input id="auth-email" type="email" autocomplete="email" required placeholder="voce@exemplo.com"></label>${isReg?`<label>Número de celular<input id="auth-phone" inputmode="tel" autocomplete="tel" required placeholder="(81) 99999-9999"></label>`:''}<label>Senha<input id="auth-password" type="password" minlength="6" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="Mínimo de 6 caracteres"></label>${isReg?`<label>Confirmar senha<input id="auth-password2" type="password" minlength="6" autocomplete="new-password" required placeholder="Repita sua senha"></label>`:''}<button class="btn primary auth-submit" type="submit">${isReg?'Criar conta':'Entrar'}</button></form><div class="auth-switch">${isReg?'Já possui uma conta?':'Ainda não possui uma conta?'} <button type="button" id="auth-switch">${isReg?'Entrar':'Criar conta'}</button></div></div><div class="auth-foot">Seus dados financeiros ficam vinculados à sua conta no Supabase.</div></div>`;
+  box.innerHTML=`<div class="auth-shell"><div class="auth-brand"><img src="./assets/raquor-logo.png" alt="RAQVOR"><span>RAQVOR</span></div><div class="auth-card"><div class="auth-kicker">${isReg?'COMECE SEU CONTROLE':'BEM-VINDO DE VOLTA'}</div><h1>${isReg?'Criar sua conta':'Entrar no RAQVOR'}</h1><p class="auth-sub">${isReg?'Cadastre seu e-mail, telefone e crie sua senha. O telefone ficará vinculado ao seu perfil.':'Acesse suas finanças em qualquer dispositivo.'}</p>${message?`<div class="auth-alert">${esc(message)}</div>`:''}<form id="auth-form" class="auth-form">${isReg?`<label>Nome completo<input id="auth-name" autocomplete="name" required placeholder="Seu nome"></label>`:''}<label>E-mail<input id="auth-email" type="email" autocomplete="email" required placeholder="voce@exemplo.com"></label>${isReg?`<label>Número de celular<input id="auth-phone" inputmode="tel" autocomplete="tel" required placeholder="(81) 99999-9999"></label>`:''}<label>Senha<input id="auth-password" type="password" minlength="6" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="Mínimo de 6 caracteres"></label>${isReg?`<label>Confirmar senha<input id="auth-password2" type="password" minlength="6" autocomplete="new-password" required placeholder="Repita sua senha"></label>`:''}<button class="btn primary auth-submit" type="submit">${isReg?'Criar conta':'Entrar'}</button></form><div class="auth-switch">${isReg?'Já possui uma conta?':'Ainda não possui uma conta?'} <button type="button" id="auth-switch">${isReg?'Entrar':'Criar conta'}</button></div></div><div class="auth-foot">Seus dados financeiros ficam vinculados à sua conta no Supabase.</div></div>`;
   box.style.display='grid';
   document.querySelector('#auth-switch').onclick=()=>showAuth(isReg?'login':'register');
   document.querySelector('#auth-form').onsubmit=async e=>{
@@ -113,7 +116,7 @@ function showAuth(mode='login',message=''){
         const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
         if(error)throw error; await startAuthenticatedApp(data.user);
       }
-    }catch(err){console.error('[NEXORA][AUTH]',err);showAuth(isReg?'register':'login',authErrorMessage(err));}
+    }catch(err){console.error('[RAQVOR][AUTH]',err);showAuth(isReg?'register':'login',authErrorMessage(err));}
     finally{const b=document.querySelector('.auth-submit');if(b){b.disabled=false;b.textContent=isReg?'Criar conta':'Entrar'}}
   };
 }
@@ -121,11 +124,39 @@ function showUserMenu(user){
   const side=document.querySelector('#sidebar'); if(!side)return;
   let el=document.querySelector('#user-panel');
   if(!el){el=document.createElement('div');el.id='user-panel';side.insertBefore(el,side.querySelector('.side-foot'));}
-  const name=esc(user?.user_metadata?.full_name||'Usuário NEXORA');
-  const phone=esc(user?.user_metadata?.phone||user?.phone||'');
-  el.innerHTML=`<div class="user-avatar">${name.charAt(0).toUpperCase()}</div><div class="user-meta"><b>${name}</b><small>${phone}</small></div><button id="logout-btn" title="Sair">↪</button>`;
+  const name=esc(currentProfile?.full_name||user?.user_metadata?.full_name||'Usuário RAQVOR');
+  const phone=esc(currentProfile?.phone||user?.user_metadata?.phone||user?.phone||'');
+  const avatar=currentProfile?.avatar_url?`<img class="user-avatar-img" src="${esc(currentProfile.avatar_url)}" alt="Foto de perfil">`:`<div class="user-avatar">${name.charAt(0).toUpperCase()}</div>`;
+  el.innerHTML=`${avatar}<div class="user-meta"><b>${name}</b><small>${phone}</small></div><button id="profile-btn" title="Meu perfil">⚙</button><button id="logout-btn" title="Sair">↪</button>`;
+  document.querySelector('#profile-btn').onclick=()=>openProfile();
   document.querySelector('#logout-btn').onclick=async()=>{await supabaseClient.auth.signOut();location.reload()};
 }
+async function refreshProfile(){
+  if(!currentUser)return;
+  const r=await supabaseClient.from('profiles').select('*').eq('id',currentUser.id).maybeSingle();
+  if(r.data){currentProfile=r.data;showUserMenu(currentUser)}
+}
+async function uploadProfileAvatar(file){
+  if(!currentUser||!file)return;
+  if(file.size>10*1024*1024)throw new Error('A foto deve ter no máximo 10 MB.');
+  const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  const path=`${currentUser.id}/${Date.now()}-${safe}`;
+  const up=await supabaseClient.storage.from('profile-avatars').upload(path,file,{contentType:file.type||'application/octet-stream',upsert:false});
+  if(up.error)throw up.error;
+  const pub=supabaseClient.storage.from('profile-avatars').getPublicUrl(path).data.publicUrl;
+  const r=await supabaseClient.from('profiles').update({avatar_url:pub}).eq('id',currentUser.id);
+  if(r.error)throw r.error;
+  currentProfile={...(currentProfile||{}),avatar_url:pub};
+  return pub;
+}
+function openProfile(){
+  const p=currentProfile||{}; const el=document.createElement('div'); el.className='modal open';
+  el.innerHTML=`<div class="modal-card profile-modal"><div class="profile-head"><div><span class="eyebrow">MINHA CONTA</span><h2>Meu perfil</h2><p>Seus dados de contato são usados para identificar e atender sua conta.</p></div><button class="close" id="profile-close">×</button></div><form id="profile-form" class="form"><div class="profile-photo"><div id="profile-photo-preview" class="profile-photo-preview">${p.avatar_url?`<img src="${esc(p.avatar_url)}" alt="Foto">`:`<span>${esc((p.full_name||currentUser?.email||'R').charAt(0).toUpperCase())}</span>`}</div><div><label class="btn secondary file-btn">Carregar foto<input id="profile-photo" type="file" accept="image/*,.heic,.heif,.avif,.webp"></label><small>JPG, PNG, WEBP, GIF, AVIF, HEIC/HEIF quando suportado. Até 10 MB.</small></div></div><div class="field"><label>Nome completo</label><input id="profile-name" required value="${esc(p.full_name||currentUser?.user_metadata?.full_name||'')}"></div><div class="field"><label>Número de celular</label><input id="profile-phone" inputmode="tel" value="${esc(p.phone||currentUser?.phone||'')}"></div><div class="field"><label>E-mail</label><input value="${esc(currentUser?.email||'')}" disabled></div><div class="actions"><button class="btn primary">Salvar perfil</button><button type="button" class="btn secondary" id="profile-cancel">Cancelar</button></div></form></div>`;
+  document.body.appendChild(el); el.querySelector('#profile-close').onclick=()=>el.remove(); el.querySelector('#profile-cancel').onclick=()=>el.remove(); el.onclick=e=>{if(e.target===el)el.remove()};
+  el.querySelector('#profile-photo').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const url=await uploadProfileAvatar(f);el.querySelector('#profile-photo-preview').innerHTML=`<img src="${esc(url)}" alt="Foto">`;toast('Foto atualizada.')}catch(err){toast('Não foi possível carregar a foto: '+err.message)}};
+  el.querySelector('#profile-form').onsubmit=async e=>{e.preventDefault();try{const full_name=el.querySelector('#profile-name').value.trim(),phone=el.querySelector('#profile-phone').value.trim();const r=await supabaseClient.from('profiles').update({full_name,phone}).eq('id',currentUser.id);if(r.error)throw r.error;await supabaseClient.auth.updateUser({data:{full_name,phone}});currentProfile={...(currentProfile||{}),full_name,phone};showUserMenu(currentUser);el.remove();toast('Perfil atualizado.')}catch(err){toast('Não foi possível salvar: '+err.message)}};
+}
+
 async function ensureWorkspace(){
   const {data,error}=await supabaseClient.rpc('get_or_create_my_workspace');
   if(error)throw error;
@@ -134,9 +165,12 @@ async function ensureWorkspace(){
   return supabaseWorkspaceId;
 }
 async function startAuthenticatedApp(user){
+  currentUser=user;
+  const pr=await supabaseClient.from('profiles').select('*').eq('id',user.id).maybeSingle();
+  currentProfile=pr.data||{id:user.id,full_name:user.user_metadata?.full_name||'',phone:user.user_metadata?.phone||user.phone||'',avatar_url:''};
   const auth=document.querySelector('#auth-screen');if(auth)auth.style.display='none';
   const app=document.querySelector('.app');if(app)app.style.display='grid';
-  showUserMenu(user);
+  showUserMenu(user); try{const ar=await supabaseClient.from('user_access_controls').select('status,reason').eq('user_id',user.id).maybeSingle();if(ar.data&&ar.data.status!=='active'){await supabaseClient.auth.signOut();throw new Error('Seu acesso está bloqueado. '+(ar.data.reason||''));}}catch(e){if(e.message?.includes('bloqueado'))throw e;}
   const baseKey='finance_nexora_v1_'+user.id;
   if(!localStorage.getItem(baseKey)){
     const old=localStorage.getItem('finance_nexora_v1'); if(old)localStorage.setItem(baseKey,old);
@@ -146,29 +180,31 @@ async function startAuthenticatedApp(user){
   db=normalizeRemoteState(db);
   lastRemoteUpdatedAt=localStorage.getItem(KEY+'_remote_updated_at')||'';
   Object.assign(db,defaultDB(),db,{settings:{...defaultDB().settings,...(db.settings||{})},categories:{...defaultDB().categories,...(db.categories||{})}});
-  db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];
+  db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];db.creditors=Array.isArray(db.creditors)?db.creditors:[];db.settings.currency=db.settings.currency||'BRL';db.settings.cycleStart=Number(db.settings.cycleStart||1);db.settings.cycleLength=Number(db.settings.cycleLength||30);
   const theme=document.querySelector('#theme'),open=document.querySelector('#open-menu'),close=document.querySelector('#close-menu'),side=document.querySelector('#sidebar');
   if(open)open.onclick=()=>side.classList.add('open'); if(close)close.onclick=()=>side.classList.remove('open');
   if(theme){theme.textContent=db.settings.theme==='dark'?'☀':'☾';theme.onclick=()=>{db.settings.theme=db.settings.theme==='dark'?'light':'dark';save();document.body.classList.toggle('dark',db.settings.theme==='dark');theme.textContent=db.settings.theme==='dark'?'☀':'☾'}}
   document.body.classList.toggle('dark',db.settings.theme==='dark');
   normalizeOverdue(); render();
-  await connectUserWorkspace();
+  await connectUserWorkspace(currentUser);
 }
-async function connectUserWorkspace(){
+async function connectUserWorkspace(authUser=currentUser){
   try{
-    setSyncStatus('V1.15 • Supabase: conectando...');
+    const user=authUser||currentUser;
+    if(!user?.id)throw new Error('Usuário autenticado não encontrado para iniciar o workspace.');
+    setSyncStatus('RAQVOR • Supabase: conectando...');
     await ensureWorkspace();
     const stateRes=await supabaseClient.from('app_state').select('state,updated_at').eq('workspace_id',supabaseWorkspaceId).maybeSingle();
     if(stateRes.error)throw stateRes.error;
     const remoteState=stateRes.data?.state||null;
     if(remoteState){applyRemoteState(remoteState,stateRes.data.updated_at);syncDirty=false;render(view)}
     else {await syncNow()}
-    syncReady=true;subscribeRealtime();await pullRemoteState({force:false});setSyncStatus('V1.15 • Supabase conectado',true);
-  }catch(err){console.error('[NEXORA][SUPABASE]',err);setSyncStatus('V1.15 • Supabase indisponível');toast(authErrorMessage(err))}
+    syncReady=true;subscribeRealtime();supabaseClient.channel('raquor-access-'+currentUser.id).on('postgres_changes',{event:'*',schema:'public',table:'user_access_controls',filter:`user_id=eq.${currentUser.id}`},async p=>{if(p.new?.status&&p.new.status!=='active'){toast('Seu acesso foi bloqueado.');await supabaseClient.auth.signOut();location.reload()}}).subscribe();await pullRemoteState({force:false});setSyncStatus('RAQVOR • Supabase conectado',true);
+  }catch(err){console.error('[RAQVOR][SUPABASE]',err);setSyncStatus('RAQVOR • Supabase indisponível');toast(authErrorMessage(err))}
 }
 async function initSupabase(){
   if(!window.supabase||!window.supabase.createClient)throw new Error('Biblioteca Supabase não carregada');
-  supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true},global:{headers:{'x-nexora-client':'finance-nexora-v1.14'}}});
+  supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true},global:{headers:{'x-raquor-client':'raqvor-v2.11'}}});
   const {data:{session}}=await supabaseClient.auth.getSession();
   if(session?.user){await startAuthenticatedApp(session.user);return true}
   showAuth('login');return false;
@@ -186,10 +222,10 @@ async function syncNow(){
     localStorage.setItem(KEY+'_remote_updated_at',stamp);
     localStorage.setItem(KEY+'_remote_initialized','1');
     syncDirty=false;
-    setSyncStatus('V1.15 • Supabase sincronizado',true);
+    setSyncStatus('RAQVOR • Supabase sincronizado',true);
   }catch(err){
-    console.error('[NEXORA][SYNC]',err);
-    setSyncStatus('V1.15 • erro de sincronização');
+    console.error('[RAQVOR][SYNC]',err);
+    setSyncStatus('RAQVOR • erro de sincronização');
   }finally{syncInProgress=false}
 }
 function queueSync(){
@@ -199,17 +235,17 @@ function queueSync(){
   syncTimer=setTimeout(syncNow,250);
 }
 window.addEventListener('online',()=>{if(syncReady){syncDirty=true;syncNow().catch(()=>{})}});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&syncReady&&!syncDirty)pullRemoteState().catch(err=>console.error('[NEXORA][PULL]',err))});
-window.addEventListener('focus',()=>{if(syncReady&&!syncDirty)pullRemoteState().catch(err=>console.error('[NEXORA][PULL]',err))});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&syncReady&&!syncDirty)pullRemoteState().catch(err=>console.error('[RAQVOR][PULL]',err))});
+window.addEventListener('focus',()=>{if(syncReady&&!syncDirty)pullRemoteState().catch(err=>console.error('[RAQVOR][PULL]',err))});
 window.addEventListener('pagehide',()=>{if(syncDirty)syncNow().catch(()=>{})});
 
 db.cashbooks=db.cashbooks||[]; db.cashbooks.forEach(c=>{c.entries=Array.isArray(c.entries)?c.entries:[]});
-db.cashbooks=db.cashbooks||[]; db.cashbooks.forEach(c=>{c.entries=Array.isArray(c.entries)?c.entries:[]}); db.transactions.forEach(x=>{if(x.paymentSource===undefined)x.paymentSource='';if(x.type==='receita'&&x.repayable===undefined)x.repayable=false}); db.debts.forEach(x=>{if(x.paymentSource===undefined)x.paymentSource=''}); db.loans.forEach(x=>{if(x.paymentSource===undefined)x.paymentSource=''}); Object.assign(db,defaultDB(),db,{settings:{...defaultDB().settings,...(db.settings||{})},categories:{...defaultDB().categories,...(db.categories||{})}}); db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];
+db.cashbooks=db.cashbooks||[]; db.cashbooks.forEach(c=>{c.entries=Array.isArray(c.entries)?c.entries:[]}); db.transactions.forEach(x=>{if(x.paymentSource===undefined)x.paymentSource='';if(x.type==='receita'&&x.repayable===undefined)x.repayable=false}); db.debts.forEach(x=>{if(x.paymentSource===undefined)x.paymentSource=''}); db.loans.forEach(x=>{if(x.paymentSource===undefined)x.paymentSource=''}); Object.assign(db,defaultDB(),db,{settings:{...defaultDB().settings,...(db.settings||{})},categories:{...defaultDB().categories,...(db.categories||{})}}); db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];db.creditors=Array.isArray(db.creditors)?db.creditors:[];db.settings.currency=db.settings.currency||'BRL';db.settings.cycleStart=Number(db.settings.cycleStart||1);db.settings.cycleLength=Number(db.settings.cycleLength||30);
 let view='dashboard'; let editingId=null;
 function save(){saveLocal();queueSync()}
 function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';clearTimeout(window._toast);window._toast=setTimeout(()=>t.style.display='none',2200)}
 function fmtDate(d){if(!d)return'—';return new Intl.DateTimeFormat('pt-BR').format(iso(d))}
-function monthKey(d){return d.slice(0,7)}
+function monthKey(d){if(d instanceof Date){const x=ymd(d);return x?x.slice(0,7):''}return String(d??'').slice(0,7)}
 function currentMonth(){return monthKey(today())}
 function weekOf(d){const x=iso(d);if(Number.isNaN(x.getTime()))return null;const first=new Date(x.getFullYear(),x.getMonth(),1,12);const offset=(first.getDay()+6)%7;const monday=new Date(first);monday.setDate(first.getDate()-offset);return Math.floor((x-monday)/86400000/7)+1}
 function weekLabel(d){const w=weekOf(d);return w?`Semana ${w}`:'Fora da semana operacional'}
@@ -218,12 +254,12 @@ function txAmount(x){return x.type==='receita'?num(x.value):-num(x.value)}
 function paidTransactions(){return db.transactions.filter(x=>x.status==='pago')}
 function ensureRecurring(){const base=new Date();for(const r of db.recurring.filter(x=>x.active)){for(let i=0;i<12;i++){const lastDay=new Date(base.getFullYear(),base.getMonth()+i+1,0).getDate();const dt=new Date(base.getFullYear(),base.getMonth()+i,Math.min(r.day,lastDay),12);const date=dt.toISOString().slice(0,10);const exists=db.transactions.some(x=>x.recurringId===r.id&&x.date===date);if(!exists)db.transactions.push({id:uid(),date,value:num(r.value),category:r.category||'Recorrente',person:r.person||'',status:'previsto',weekAssigned:weekOf(date),note:`Lançamento recorrente — ${r.description}`,type:r.type,recurringId:r.id})}}save()}
 function totals(m=currentMonth()){const arr=db.transactions.filter(x=>monthKey(x.date)===m);return{r:arr.filter(x=>x.type==='receita'&&x.status==='pago').reduce((a,x)=>a+num(x.value),0),d:arr.filter(x=>x.type==='despesa'&&x.status==='pago').reduce((a,x)=>a+num(x.value),0),rp:arr.filter(x=>x.type==='receita'&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0),dp:arr.filter(x=>x.type==='despesa'&&x.status!=='pago').reduce((a,x)=>a+num(x.value),0)}}
-function currentBalance(){return num(db.balance)+paidTransactions().filter(x=>x.cashApplied!==false).reduce((a,x)=>a+txAmount(x),0)}
+function currentBalance(){return num(db.balance)+paidTransactions().reduce((a,x)=>a+txAmount(x),0)}
 function cashStatus(){const bal=currentBalance();const received=paidTransactions().filter(x=>x.type==='receita').reduce((a,x)=>a+num(x.value),0);const paid=paidTransactions().filter(x=>x.type==='despesa').reduce((a,x)=>a+num(x.value),0);return{balance:bal,received,paid,deficit:received===0&&paid>0&&bal<0}}
 function projectedBalance(){return currentBalance()+db.transactions.filter(x=>x.status!=='pago').reduce((a,x)=>a+txAmount(x),0)}
 function debtOutstanding(){return db.debts.reduce((a,d)=>{const paid=db.transactions.filter(x=>x.debtId===d.id&&x.status==='pago').reduce((s,x)=>s+num(x.value),0);return a+Math.max(0,num(d.value)-paid)},0)}
 function debtRemaining(id){const d=db.debts.find(x=>x.id===id);if(!d)return 0;const paid=db.transactions.filter(x=>x.debtId===id&&x.status==='pago').reduce((s,x)=>s+num(x.value),0);return Math.max(0,num(d.value)-paid)}
-function table(rows,heads){return rows.length?`<div class="table-wrap"><table class="table"><thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<div class="empty">Nenhum registro encontrado.</div>`}
+function table(rows,heads){const safeRows=Array.isArray(rows)?rows:(rows==null?[]:[String(rows)]);const body=safeRows.join('');return body?`<div class="table-wrap"><table class="table"><thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`:`<div class="empty">Nenhum registro encontrado.</div>`}
 function layout(title,body){$('#page-title').textContent=title;$('#content').innerHTML=body;bindGlobal()}
 function overdueInfo(date){const d=iso(date), t=iso(today());if(Number.isNaN(d.getTime())||d>=t)return{days:0,label:''};const days=Math.max(1,Math.floor((t-d)/86400000));const priority=days>=8?'Crítica':days>=3?'Alta':'Média';return{days,priority,label:`Atrasado • ${priority}`}}
 function normalizeOverdue(){let changed=false;for(const x of db.transactions){if(x.type!=='despesa'||x.status==='pago'||!x.date)continue;const info=overdueInfo(x.date);if(info.days>0){if(x.status!=='atrasado'||x.priority!==info.priority){x.status='atrasado';x.priority=info.priority;changed=true}}else if(x.status==='atrasado'){x.status='pendente';delete x.priority;changed=true}}if(changed)save()}
@@ -281,8 +317,8 @@ function cards(){const rows=db.cards.map(c=>{const used=db.transactions.filter(x
 function purchaseForm(cardId){const c=db.cards.find(x=>x.id===cardId);layout('Nova compra no cartão',`<div class="card"><p><b>${esc(c.name)}</b> • ${esc(c.bank)}</p><form id="purchase-form" class="form"><div class="field"><label>Data da compra</label><input id="pdate" type="date" value="${today()}" required></div><div class="field"><label>Valor total (R$)</label><input id="pvalue" type="number" step=".01" min="0" required></div><div class="field"><label>Parcelas</label><input id="pparts" type="number" min="1" value="1"></div><div class="field"><label>Categoria</label><select id="pcat">${categories('despesa')}</select></div><div class="field"><label>Estabelecimento</label><input id="pstore"></div><div class="field full"><label>Observação</label><textarea id="pnote"></textarea></div><div class="actions full"><button class="btn primary">Lançar compra</button></div></form></div>`);$('#purchase-form').onsubmit=e=>{e.preventDefault();const total=num($('#pvalue').value),parts=Math.max(1,num($('#pparts').value)),base=total/parts;for(let i=0;i<parts;i++){const dt=new Date(iso($('#pdate').value));dt.setMonth(dt.getMonth()+i);db.transactions.push({id:uid(),date:dt.toISOString().slice(0,10),value:base,category:$('#pcat').value,person:$('#pstore').value||c.name,status:'previsto',weekAssigned:weekOf(dt.toISOString().slice(0,10)),note:`Cartão ${c.name} — parcela ${i+1}/${parts}. ${$('#pnote').value}`,type:'despesa',cardId:c.id,installment:i+1})}save();toast('Compra parcelada lançada');cards()}}
 function loans(){const rows=db.loans.map(l=>`<tr><td>${esc(l.kind)}</td><td>${esc(l.person)}</td><td>${money(l.value)}</td><td>${l.installments||1}</td><td>${statusPill(l.status||'previsto')}</td><td><button class="btn secondary" data-edit-loan="${l.id}">Editar</button> <button class="btn danger" data-del-loan="${l.id}">Excluir</button></td></tr>`);layout('Empréstimos',`<div class="actions"><button class="btn primary" data-new-loan>+ Novo empréstimo</button></div>${table(rows,['Tipo','Pessoa/Instituição','Valor','Parcelas','Status','Ações'])}`)}
 function loanForm(id=null){const l=id?db.loans.find(x=>x.id===id):null;layout(l?'Editar Empréstimo':'Novo Empréstimo',`<div class="card"><form id="loan-form" class="form"><div class="field"><label>Tipo</label><select id="lkind"><option>Recebido</option><option>Concedido</option></select></div><div class="field"><label>Pessoa / instituição</label><input id="lperson" value="${esc(l?.person||'')}" required></div><div class="field"><label>Valor</label><input id="lvalue" type="number" step=".01" value="${l?.value??''}" required></div><div class="field"><label>Parcelas</label><input id="lparts" type="number" min="1" value="${l?.installments||1}"></div><div class="field"><label>Primeiro vencimento</label><input id="ldate" type="date" value="${l?.firstDate||today()}"></div><div class="field"><label>Status</label><select id="lstatus"><option>previsto</option><option>ativo</option><option>quitado</option></select></div><div class="actions full"><button class="btn primary">Salvar empréstimo</button></div></form></div>`);if(l)$('#lkind').value=l.kind,$('#lstatus').value=l.status;$('#loan-form').onsubmit=e=>{e.preventDefault();const data={kind:$('#lkind').value,person:$('#lperson').value,value:num($('#lvalue').value),installments:num($('#lparts').value),firstDate:$('#ldate').value,status:$('#lstatus').value};if(l){Object.assign(l,data);db.transactions=db.transactions.filter(x=>x.loanId!==l.id)}else{const id=uid();l={id,...data};db.loans.push(l)}if(data.status!=='quitado'){const sign=data.kind==='Recebido'?'receita':'despesa';const parts=Math.max(1,data.installments||1);const part=data.value/parts;for(let i=0;i<parts;i++){const dt=new Date(iso(data.firstDate));dt.setMonth(dt.getMonth()+i);const date=dt.toISOString().slice(0,10);db.transactions.push({id:uid(),date,value:part,category:'Empréstimos',person:data.person,status:i===0&&data.kind==='Recebido'?'pago':'previsto',weekAssigned:weekOf(date),note:`Empréstimo ${l.id} — ${data.kind} parcela ${i+1}/${parts}`,type:sign,loanId:l.id,installment:i+1})}}save();toast('Empréstimo salvo');loans()}}
-function recurring(){const rows=db.recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${r.type}</td><td>${money(r.value)}</td><td>Dia ${r.day}</td><td>${r.active?'Ativa':'Inativa'}</td><td><button class="btn secondary" data-toggle-rec="${r.id}">${r.active?'Pausar':'Ativar'}</button> <button class="btn danger" data-del-rec="${r.id}">Excluir</button></td></tr>`);layout('Receitas / Despesas Recorrentes',`<div class="card"><form id="rec-form" class="form"><div class="field"><label>Descrição</label><input id="rdesc" required></div><div class="field"><label>Tipo</label><select id="rtype"><option value="receita">Receita</option><option value="despesa">Despesa</option></select></div><div class="field"><label>Valor</label><input id="rvalue" type="number" step=".01" required></div><div class="field"><label>Dia do mês</label><input id="rday" type="number" min="1" max="31" value="1"></div><div class="field"><label>Categoria</label><input id="rcat"></div><div class="field"><label>Pessoa / instituição</label><input id="rperson"></div><div class="actions full"><button class="btn primary">Criar recorrência</button></div></form></div><div class="section">${table(rows,['Descrição','Tipo','Valor','Periodicidade','Status','Ações'])}</div>`);$('#rec-form').onsubmit=e=>{e.preventDefault();db.recurring.push({id:uid(),description:$('#rdesc').value,type:$('#rtype').value,value:num($('#rvalue').value),day:num($('#rday').value),category:$('#rcat').value,person:$('#rperson').value,active:true,lastGenerated:null});save();ensureRecurring();toast('Recorrência criada');recurring()}}
-function yearKey(d){return d.slice(0,4)}
+function recurring(){const rows=db.recurring.map(r=>`<tr><td>${esc(r.description)}</td><td>${r.type}</td><td>${money(r.value)}</td><td>Dia ${r.day}</td><td>${r.active?'Ativa':'Inativa'}</td><td><button class="btn secondary" data-toggle-rec="${r.id}">${r.active?'Pausar':'Ativar'}</button> <button class="btn danger" data-del-rec="${r.id}">Excluir</button></td></tr>`);layout('Receitas / Despesas Recorrentes',`<div class="subnav"><button class="btn secondary" data-view="movimentos">← Dívidas e Despesas</button><button class="btn secondary" data-view="calendario">Calendário</button></div><div class="card"><form id="rec-form" class="form"><div class="field"><label>Descrição</label><input id="rdesc" required></div><div class="field"><label>Tipo</label><select id="rtype"><option value="receita">Receita</option><option value="despesa">Despesa</option></select></div><div class="field"><label>Valor</label><input id="rvalue" type="number" step=".01" required></div><div class="field"><label>Dia do mês</label><input id="rday" type="number" min="1" max="31" value="1"></div><div class="field"><label>Categoria</label><input id="rcat"></div><div class="field"><label>Pessoa / instituição</label><input id="rperson"></div><div class="actions full"><button class="btn primary">Criar recorrência</button></div></form></div><div class="section">${table(rows,['Descrição','Tipo','Valor','Periodicidade','Status','Ações'])}</div>`);$('#rec-form').onsubmit=e=>{e.preventDefault();db.recurring.push({id:uid(),description:$('#rdesc').value,type:$('#rtype').value,value:num($('#rvalue').value),day:num($('#rday').value),category:$('#rcat').value,person:$('#rperson').value,active:true,lastGenerated:null});save();ensureRecurring();toast('Recorrência criada');recurring()}}
+function yearKey(d){if(d instanceof Date){const x=ymd(d);return x?x.slice(0,4):''}return String(d??'').slice(0,4)}
 function monthName(m){return new Intl.DateTimeFormat('pt-BR',{month:'long'}).format(new Date(`${m}-01T12:00:00`)).replace(/^./,c=>c.toUpperCase())}
 function mondayOf(d){const x=iso(d);const day=x.getDay();const delta=day===0?-6:1-day;const r=new Date(x);r.setDate(x.getDate()+delta);return r}
 function sundayOf(d){const r=mondayOf(d);r.setDate(r.getDate()+6);return r}
@@ -319,10 +355,11 @@ function planning(){
   const t=totals();
   layout('Planejamento',`<div class="hero planning-hero"><div><small>VISÃO FINANCEIRA</small><h2>Planejamento anual</h2><small>Despesas, dívidas e receitas organizadas por mês, semana e dia.</small></div><div class="side"><small>FALTA PAGAR NO MÊS ATUAL</small><br><b>${money(t.dp)}</b><br><small>Receitas previstas ${money(t.rp)}</small></div></div><div class="grid"><div class="card"><div class="label">Saldo atual</div><div class="value">${money(currentBalance())}</div></div><div class="card"><div class="label">Receitas previstas</div><div class="value positive">${money(t.rp)}</div></div><div class="card"><div class="label">Despesas previstas</div><div class="value negative">${money(t.dp)}</div></div><div class="card"><div class="label">Saldo projetado</div><div class="value">${money(projectedBalance())}</div></div></div><div class="card panorama"><div class="section-head"><div><h3>Panorama por credor / origem</h3><p>Compromissos repetidos são consolidados pelo mesmo credor.</p></div></div>${table(creditorRows,['Credor / origem','A pagar no mês','Dívida total','A receber','Exposição total'])}</div><div class="section planning-year">${monthsHtml}</div><div class="actions"><button class="btn primary" data-view="recorrentes">Gerenciar recorrências</button></div>`)
 }
+function calendar(){const m=currentMonth();const rows=db.transactions.filter(x=>monthKey(x.date)===m).sort((a,b)=>a.date.localeCompare(b.date)).map(x=>`<tr><td>${fmtDate(x.date)}</td><td>${esc(assignedWeekLabel(x))}</td><td>${x.type==='receita'?'Receita':'Despesa'}</td><td>${esc(x.category)}</td><td>${esc(x.person)}</td><td>${money(x.value)}</td><td>${esc(x.paymentSource||'—')}</td><td>${statusPill(x.status,x.priority)}</td><td><button class="btn secondary" data-edit="${x.id}">Editar</button></td></tr>`);layout('Calendário Financeiro',`<div class="card"><p>Os lançamentos são classificados automaticamente pela semana de segunda a sexta. Você pode realocar a semana manualmente na edição.</p>${table(rows,['Vencimento','Semana','Tipo','Categoria','Credor/Origem','Valor','Status','Ação'])}</div>`)}
 function reports(){const t=totals();const cats={};db.transactions.filter(x=>x.type==='despesa'&&monthKey(x.date)===currentMonth()).forEach(x=>cats[x.category]=(cats[x.category]||0)+num(x.value));const rows=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${money(v)}</td><td>${((v/(t.d+t.dp||1))*100).toFixed(1)}%</td></tr>`);layout('Relatórios',`<div class="grid"><div class="card"><div class="label">Receitas pagas</div><div class="value positive">${money(t.r)}</div></div><div class="card"><div class="label">Despesas pagas</div><div class="value negative">${money(t.d)}</div></div><div class="card"><div class="label">Resultado</div><div class="value">${money(t.r-t.d)}</div></div><div class="card"><div class="label">Lançamentos</div><div class="value">${db.transactions.length}</div></div></div><div class="card"><h3>Despesas por categoria</h3>${table(rows,['Categoria','Valor','Participação'])}</div>`)}
 function config(){
   layout('Configurações',`<div class="settings-shell">
-    <div class="settings-intro"><div><span>GESTÃO FINANCEIRA NEXORA</span><h2>Configurações</h2><p>Centralize aqui os parâmetros que controlam o aplicativo e os dados financeiros.</p></div><div class="settings-badge">● Sistema local</div></div>
+    <div class="settings-intro"><div><span>RAQVOR</span><h2>Configurações</h2><p>Centralize aqui os parâmetros que controlam o aplicativo e os dados financeiros.</p></div><div class="settings-badge">● Sistema local</div></div>
     <form id="cfg" class="settings-grid">
       <section class="settings-card"><div class="settings-card-head"><div class="settings-icon">◈</div><div><h3>Projeto e identidade</h3><p>Defina o nome do seu projeto e a base financeira.</p></div></div><div class="form settings-form"><div class="field"><label>Nome do projeto financeiro</label><input id="project" value="${esc(db.settings.project)}" placeholder="Ex.: Finanças da família"></div><div class="field"><label>Moeda</label><input value="BRL — Real brasileiro (R$)" disabled></div></div></section>
       <section class="settings-card"><div class="settings-card-head"><div class="settings-icon">$</div><div><h3>Caixa inicial</h3><p>Valor disponível antes dos lançamentos registrados.</p></div></div><div class="form settings-form"><div class="field"><label>Saldo inicial (R$)</label><input id="bal" type="number" step="0.01" value="${db.balance}"></div><div class="settings-note"><b>Regra do caixa</b><span>Receitas recebidas aumentam o caixa. Pagamentos reduzem o caixa. Se houver pagamento sem receita recebida suficiente, o saldo ficará negativo para mostrar o déficit real.</span></div></div></section>
@@ -331,10 +368,10 @@ function config(){
       <section class="settings-card danger-zone"><div class="settings-card-head"><div class="settings-icon">!</div><div><h3>Dados locais</h3><p>Use com atenção. Esta ação remove os dados armazenados neste dispositivo.</p></div></div><div class="actions"><button class="btn primary">Salvar configurações</button><button type="button" class="btn danger" id="reset-data">Excluir dados locais</button></div></section>
     </form>
   </div>`);
-  $('#cfg').onsubmit=e=>{e.preventDefault();db.balance=num($('#bal').value);db.settings.project=$('#project').value.trim()||'Gestão financeira NEXORA';db.categories.receita=$('#catsr').value.split(',').map(x=>x.trim()).filter(Boolean);db.categories.despesa=$('#catsd').value.split(',').map(x=>x.trim()).filter(Boolean);save();toast('Configurações salvas com sucesso');render('config')};
-  $('#reset-data').onclick=()=>{if(confirm('Excluir todos os dados locais do Gestão financeira NEXORA?')){db=defaultDB();save();render('dashboard');toast('Dados locais excluídos')}}
+  $('#cfg').onsubmit=e=>{e.preventDefault();db.balance=num($('#bal').value);db.settings.project=$('#project').value.trim()||'RAQVOR';db.categories.receita=$('#catsr').value.split(',').map(x=>x.trim()).filter(Boolean);db.categories.despesa=$('#catsd').value.split(',').map(x=>x.trim()).filter(Boolean);save();toast('Configurações salvas com sucesso');render('config')};
+  $('#reset-data').onclick=()=>{if(confirm('Excluir todos os dados locais do RAQVOR?')){db=defaultDB();save();render('dashboard');toast('Dados locais excluídos')}}
 }
-/* FINANCE NEXORA V1.5 — Dívidas/Despesas unificadas, empréstimos como dívida, calendário semanal e dashboard executivo */
+/* FINANCE RAQVOR V1.5 — Dívidas/Despesas unificadas, empréstimos como dívida, calendário semanal e dashboard executivo */
 function loanTotalPayable(principal, parts, installment){
   const p=num(principal), n=Math.max(1,num(parts)||1), v=num(installment);
   return v>0 ? v*n : p;
@@ -391,100 +428,92 @@ function unifiedDashboard(){
   const max=Math.max(1,...monthRows.map(x=>Math.max(x.r,x.e)));
   const bars=monthRows.map(x=>`<div class="bar-col"><div class="bar-stack"><i class="bar receive" style="height:${Math.round(x.r/max*110)}px" title="Receitas ${money(x.r)}"></i><i class="bar expense" style="height:${Math.round(x.e/max*110)}px" title="Despesas ${money(x.e)}"></i></div><span>${esc(x.label)}</span></div>`).join('');
   const due=db.transactions.filter(x=>x.status!=='pago').sort((a,b)=>a.date.localeCompare(b.date)).slice(0,10);
-  layout('Dashboard',`<div class="hero dashboard-hero"><div><small>GESTÃO FINANCEIRA NEXORA • CONTROLE FINANCEIRO</small><h2>${money(bal)}</h2><small>Saldo atual disponível</small></div><div class="side"><small>SALDO PROJETADO</small><br><b>${money(proj)}</b><br><small>Após compromissos previstos</small></div></div><div class="grid dashboard-kpis"><div class="card"><div class="label">Receitas recebidas</div><div class="value positive">${money(t.r)}</div><small>mês atual</small></div><div class="card"><div class="label">Despesas pagas</div><div class="value negative">${money(t.d)}</div><small>mês atual</small></div><div class="card"><div class="label">A pagar</div><div class="value negative">${money(pendingPay)}</div><small>compromissos em aberto</small></div><div class="card"><div class="label">A receber</div><div class="value positive">${money(pendingRec)}</div><small>receitas previstas</small></div><div class="card"><div class="label">Dívidas</div><div class="value negative">${money(debtOutstanding()+loanDebt)}</div><small>saldo estimado em aberto</small></div><div class="card"><div class="label">Cartões</div><div class="value">${db.cards.length}</div><small>cadastrados</small></div><div class="card"><div class="label">Resultado do mês</div><div class="value ${monthlyNet>=0?'positive':'negative'}">${money(monthlyNet)}</div><small>receitas − despesas pagas</small></div><div class="card"><div class="label">Operações financeiras</div><div class="value">${db.transactions.length}</div><small>lançamentos registrados</small></div></div><div class="grid dashboard-panels"><div class="card"><div class="section-head"><div><h3>Fluxo mensal</h3><p>Receitas recebidas × despesas pagas</p></div></div><div class="chart-legend"><span><i class="dot receive"></i>Receitas</span><span><i class="dot expense"></i>Despesas</span></div><div class="bar-chart">${bars}</div></div><div class="card"><div class="section-head"><div><h3>Saúde financeira</h3><p>Visão resumida do mês atual</p></div></div><div class="health"><div><span>Resultado líquido</span><b class="${monthlyNet>=0?'positive':'negative'}">${money(monthlyNet)}</b></div><div><span>Compromissos em aberto</span><b>${money(pendingPay)}</b></div><div><span>Receitas ainda previstas</span><b class="positive">${money(pendingRec)}</b></div><div><span>Saldo projetado</span><b class="${proj>=0?'positive':'negative'}">${money(proj)}</b></div><div><span>${cashStatus().deficit?'Déficit de caixa':'Caixa após pagamentos'}</span><b class="${bal>=0?'positive':'negative'}">${money(bal)}</b></div></div></div></div><div class="card"><div class="section-head"><div><h3>Próximos pagamentos e recebimentos</h3><p>Calendário financeiro resumido</p></div><button class="btn primary" data-view="calendario">Abrir calendário</button></div>${table(due.map(x=>`<tr><td>${fmtDate(x.date)}</td><td>${x.type==='receita'?'Receber':'Pagar'}</td><td>${esc(x.person||x.category||'—')}</td><td>${money(x.value)}</td><td>${statusPill(x.status,x.priority)}</td></tr>`),['Data','Fluxo','Credor / origem','Valor','Status'])}</div><div class="card section"><div class="section-head"><div><h3>Panorama financeiro</h3><p>Dívidas, despesas, empréstimos, cartões e receitas em conjunto.</p></div><button class="btn secondary" data-view="movimentos">Gerenciar compromissos</button></div><div class="overview-strip"><div><small>Dívidas + empréstimos</small><b>${money(debtOutstanding()+loanDebt)}</b></div><div><small>Despesas previstas</small><b>${money(t.dp)}</b></div><div><small>Receitas previstas</small><b>${money(t.rp)}</b></div><div><small>Cartões utilizados</small><b>${money(db.cards.reduce((a,c)=>a+db.transactions.filter(x=>x.cardId===c.id&&x.status!=='pago').reduce((s,x)=>s+num(x.value),0),0))}</b></div></div></div>`)
+  layout('Dashboard',`<div class="hero dashboard-hero"><div><small>RAQVOR • CONTROLE FINANCEIRO</small><h2>${money(bal)}</h2><small>Saldo atual disponível</small></div><div class="side"><small>SALDO PROJETADO</small><br><b>${money(proj)}</b><br><small>Após compromissos previstos</small></div></div><div class="grid dashboard-kpis"><div class="card"><div class="label">Receitas recebidas</div><div class="value positive">${money(t.r)}</div><small>mês atual</small></div><div class="card"><div class="label">Despesas pagas</div><div class="value negative">${money(t.d)}</div><small>mês atual</small></div><div class="card"><div class="label">A pagar</div><div class="value negative">${money(pendingPay)}</div><small>compromissos em aberto</small></div><div class="card"><div class="label">A receber</div><div class="value positive">${money(pendingRec)}</div><small>receitas previstas</small></div><div class="card"><div class="label">Dívidas</div><div class="value negative">${money(debtOutstanding()+loanDebt)}</div><small>saldo estimado em aberto</small></div><div class="card"><div class="label">Cartões</div><div class="value">${db.cards.length}</div><small>cadastrados</small></div><div class="card"><div class="label">Resultado do mês</div><div class="value ${monthlyNet>=0?'positive':'negative'}">${money(monthlyNet)}</div><small>receitas − despesas pagas</small></div><div class="card"><div class="label">Operações financeiras</div><div class="value">${db.transactions.length}</div><small>lançamentos registrados</small></div></div><div class="grid dashboard-panels"><div class="card"><div class="section-head"><div><h3>Fluxo mensal</h3><p>Receitas recebidas × despesas pagas</p></div></div><div class="chart-legend"><span><i class="dot receive"></i>Receitas</span><span><i class="dot expense"></i>Despesas</span></div><div class="bar-chart">${bars}</div></div><div class="card"><div class="section-head"><div><h3>Saúde financeira</h3><p>Visão resumida do mês atual</p></div></div><div class="health"><div><span>Resultado líquido</span><b class="${monthlyNet>=0?'positive':'negative'}">${money(monthlyNet)}</b></div><div><span>Compromissos em aberto</span><b>${money(pendingPay)}</b></div><div><span>Receitas ainda previstas</span><b class="positive">${money(pendingRec)}</b></div><div><span>Saldo projetado</span><b class="${proj>=0?'positive':'negative'}">${money(proj)}</b></div><div><span>${cashStatus().deficit?'Déficit de caixa':'Caixa após pagamentos'}</span><b class="${bal>=0?'positive':'negative'}">${money(bal)}</b></div></div></div></div><div class="card"><div class="section-head"><div><h3>Próximos pagamentos e recebimentos</h3><p>Calendário financeiro resumido</p></div><button class="btn primary" data-view="calendario">Abrir calendário</button></div>${table(due.map(x=>`<tr><td>${fmtDate(x.date)}</td><td>${x.type==='receita'?'Receber':'Pagar'}</td><td>${esc(x.person||x.category||'—')}</td><td>${money(x.value)}</td><td>${statusPill(x.status,x.priority)}</td></tr>`),['Data','Fluxo','Credor / origem','Valor','Status'])}</div><div class="card section"><div class="section-head"><div><h3>Panorama financeiro</h3><p>Dívidas, despesas, empréstimos, cartões e receitas em conjunto.</p></div><button class="btn secondary" data-view="movimentos">Gerenciar compromissos</button></div><div class="overview-strip"><div><small>Dívidas + empréstimos</small><b>${money(debtOutstanding()+loanDebt)}</b></div><div><small>Despesas previstas</small><b>${money(t.dp)}</b></div><div><small>Receitas previstas</small><b>${money(t.rp)}</b></div><div><small>Cartões utilizados</small><b>${money(db.cards.reduce((a,c)=>a+db.transactions.filter(x=>x.cardId===c.id&&x.status!=='pago').reduce((s,x)=>s+num(x.value),0),0))}</b></div></div></div>`)
+}
+function financialWeekRanges(month){
+  const first=iso(`${month}-01`), last=iso(`${month}-${String(new Date(first.getFullYear(),first.getMonth()+1,0).getDate()).padStart(2,'0')}`);
+  const ranges=[];
+  let start=new Date(first);
+  while(start<=last){
+    const dow=start.getDay();
+    let end=new Date(start);
+    if(dow===6) end.setDate(end.getDate()+6);       // Sat → following Fri
+    else if(dow===0) end.setDate(end.getDate()+5);  // Sun → following Fri
+    else end.setDate(end.getDate()+(5-dow));       // Mon-Fri → Friday
+    if(end>last)end=new Date(last);
+    ranges.push({start:ymd(start),end:ymd(end),days:dateRange(start,end)});
+    // Every subsequent operational week starts on Monday.
+    const next=new Date(end);
+    next.setDate(next.getDate()+1);
+    if(next.getDay()!==1){const add=(8-next.getDay())%7;next.setDate(next.getDate()+add)}
+    start=next;
+  }
+  // A first partial week with fewer than five weekdays is merged into the next week.
+  if(ranges.length>1){
+    const f=ranges[0];const weekdays=f.days.filter(d=>{const z=iso(d).getDay();return z>=1&&z<=5}).length;
+    if(weekdays<5){
+      ranges[1].start=f.start;
+      ranges[1].days=dateRange(iso(ranges[1].start),iso(ranges[1].end));
+      ranges.shift();
+    }
+  }
+  // A final partial week with fewer than five weekdays is merged into the previous week.
+  if(ranges.length>1){
+    const l=ranges[ranges.length-1];const weekdays=l.days.filter(d=>{const z=iso(d).getDay();return z>=1&&z<=5}).length;
+    if(weekdays<5){
+      const p=ranges[ranges.length-2];p.end=l.end;p.days=dateRange(iso(p.start),iso(p.end));ranges.pop();
+    }
+  }
+  return ranges.map((r,i)=>({...r,n:i+1}));
+}
+
+function dateRange(start,end){const out=[];let d=iso(start);const e=iso(end);if(Number.isNaN(d.getTime())||Number.isNaN(e.getTime()))return out;while(d<=e){out.push(ymd(d));d.setDate(d.getDate()+1)}return out}
+function groupCreditor(items){
+  const map=new Map();
+  for(const x of (Array.isArray(items)?items:[])){
+    const name=(x.person||x.creditor||x.category||'Sem credor').trim()||'Sem credor';
+    const date=String(x.date||'');
+    const key=`${name.toLowerCase()}|${date}`;
+    if(!map.has(key))map.set(key,{name,total:0,items:[],date});
+    const g=map.get(key);g.total+=num(x.value);g.items.push(x);
+  }
+  return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date)||b.total-a.total);
 }
 let calendarCursor=currentMonth();
 function renderCalendarShift(delta){calendarCursor=shiftMonth(calendarCursor,delta);calendar(calendarCursor)}
 function calendar(m=calendarCursor){
-  calendarCursor=m||currentMonth();
-  const month=calendarCursor;
-  const weeks=financialWeekRanges(month);
-  const todayKey=today();
+  const month=m||currentMonth(), weeks=financialWeekRanges(month), todayKey=today();
   const monthItems=db.transactions.filter(x=>monthKey(x.date)===month);
-  const unpaidPay=monthItems.filter(x=>x.type==='despesa'&&x.status!=='pago');
+  const pendingPay=monthItems.filter(x=>x.type==='despesa'&&x.status!=='pago');
   const pendingRec=monthItems.filter(x=>x.type==='receita'&&x.status!=='pago');
-  const totalPay=unpaidPay.reduce((a,x)=>a+num(x.value),0);
+  const totalPay=pendingPay.reduce((a,x)=>a+num(x.value),0);
   const totalRec=pendingRec.reduce((a,x)=>a+num(x.value),0);
-  const cash=currentBalance();
-  const coverage=Math.max(0,cash)+totalRec;
-  const remainingToCover=Math.max(0,totalPay-coverage);
-
-  const monthStart=iso(`${month}-01`);
-  const monthEnd=new Date(monthStart.getFullYear(),monthStart.getMonth()+1,0,12);
-  const availableDays=[];
-  let cursor=new Date(todayKey>month?todayKey:monthStart);
-  if(cursor<monthStart)cursor=new Date(monthStart);
-  cursor.setHours(12,0,0,0);
-  while(cursor<=monthEnd){
-    const d=ymd(cursor);
-    if(!db.settings.daysOff.includes(d))availableDays.push(d);
-    cursor.setDate(cursor.getDate()+1);
-  }
-  const dailyNeed=remainingToCover/Math.max(1,availableDays.length);
-  const monthStatus=remainingToCover<=0?'Cobertura garantida':'Busca necessária';
-
+  const cash=Math.max(0,currentBalance());
+  const debt=Math.max(0,totalPay-cash);
+  const remainingDays=Math.max(1,weeks.flatMap(w=>w.days).filter(d=>d>=todayKey&&!db.settings.daysOff.includes(d)).length);
+  const dailyNeed=debt/remainingDays;
   const weekHtml=weeks.map((w,idx)=>{
-    const items=calendarWeekItems(month,w);
+    const items=monthItems.filter(x=>w.days.includes(x.date));
     const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
-    const receipts=items.filter(x=>x.type==='receita');
-    const recPending=receipts.filter(x=>x.status!=='pago');
-    const recPaid=receipts.filter(x=>x.status==='pago');
+    const rec=items.filter(x=>x.type==='receita'&&x.status!=='pago');
     const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
-    const recPendingTotal=recPending.reduce((a,x)=>a+num(x.value),0);
-    const recPaidTotal=recPaid.reduce((a,x)=>a+num(x.value),0);
-    const weekCoverage=recPendingTotal+recPaidTotal;
-    const weekNeed=Math.max(0,payTotal-weekCoverage);
-    const weekStart=iso(w.start);
-    const weekEnd=iso(w.end);
-    const weekDays=[];
-    let wd=new Date(weekStart);
-    while(wd<=weekEnd){
-      const d=ymd(wd);
-      if(!db.settings.daysOff.includes(d) && d>=todayKey)weekDays.push(d);
-      wd.setDate(wd.getDate()+1);
-    }
-    const weekDaily=weekNeed/Math.max(1,weekDays.length);
-    const isCurrent=todayKey>=w.start&&todayKey<=w.end&&month===currentMonth();
-
-    const records=[...pay,...receipts].sort((a,b)=>a.date.localeCompare(b.date));
-    const rows=records.length?records.map(x=>{
-      const isPay=x.type==='despesa';
-      const currentWeek=weeks.findIndex(q=>x.date>=q.start&&x.date<=q.end);
-      const movedWeek=Number.isInteger(Number(x.weekAssigned))?Number(x.weekAssigned):currentWeek+1;
-      const options=weeks.map((q,i)=>`<option value="${i+1}" ${movedWeek===i+1?'selected':''}>Semana ${i+1} • ${fmtDate(q.start)}–${fmtDate(q.end)}</option>`).join('');
-      return `<div class="calendar-record ${isPay?'pay':'receive'}">
-        <div class="calendar-record-main">
-          <div class="calendar-record-top"><span class="calendar-flow ${isPay?'pay':'receive'}">${isPay?'PAGAMENTO':'RECEITA'}</span><span class="calendar-date">${fmtDate(x.date)}</span>${statusPill(x.status,x.priority)}</div>
-          <strong>${esc(x.person||x.category||'Sem identificação')}</strong>
-          <small>${esc(x.category||'')} ${x.note?`• ${esc(x.note)}`:''}</small>
-        </div>
-        <div class="calendar-record-value ${isPay?'negative':'positive'}">${isPay?'−':'+'} ${money(x.value)}</div>
-        <div class="calendar-record-actions">
-          <button class="btn ${x.status==='pago'?'secondary':'primary'} mini" data-toggle-paid="${x.id}">${x.status==='pago'?(isPay?'Reverter pago':'Reverter recebimento'):(isPay?'Marcar pago':'Marcar recebido')}</button>
-          <button class="btn secondary mini" data-edit="${x.id}">Editar</button>
-          <label class="calendar-move"><span>Realocar</span><select data-move-week="${x.id}">${options}</select></label>
-        </div>
-      </div>`;
-    }).join(''):`<div class="calendar-empty-week">Nenhum pagamento ou receita nesta semana.</div>`;
-
+    const recTotal=rec.reduce((a,x)=>a+num(x.value),0);
+    const weekDebt=Math.max(0,payTotal-recTotal-(idx===0?cash:0));
+    const activeDays=w.days.filter(d=>d>=todayKey&&!db.settings.daysOff.includes(d));
+    const daily=weekDebt/Math.max(1,activeDays.length);
+    const byCreditor=groupCreditor(pay);
+    const isCurrent=w.days.includes(todayKey);
     return `<section class="finance-week ${isCurrent?'current':''}">
-      <div class="finance-week-head">
-        <div><span class="eyebrow">SEMANA ${idx+1}${isCurrent?' • ATUAL':''}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div>
-        <div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(weekCoverage)}</b></div><div><small>Falta cobrir</small><b class="${weekNeed?'negative':'positive'}">${money(weekNeed)}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b></div></div>
-      </div>
-      <div class="finance-week-body">${rows}</div>
-      <div class="finance-week-footer"><div><small>Total a pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas do ciclo</small><b class="positive">${money(weekCoverage)}</b></div><div><small>Recebido</small><b class="positive">${money(recPaidTotal)}</b></div><div><small>Falta cobrir</small><b class="${weekNeed?'negative':'positive'}">${money(weekNeed)}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b><span>${weekDays.length} dia(s) disponíveis</span></div></div>
+      <div class="finance-week-head"><div><span class="eyebrow">SEMANA ${idx+1}${isCurrent?' • ATUAL':''}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div><div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Diária</small><b>${money(daily)}</b></div></div></div>
+      <div class="finance-week-body">${byCreditor.length?byCreditor.map(g=>`<div class="creditor-line"><div class="creditor-main"><b>${esc(g.name)}</b><span>${g.items.map(x=>`${fmtDate(x.date)} • ${esc(x.category||'compromisso')}`).join(' · ')}</span></div><strong class="negative">${money(g.total)}</strong></div>`).join(''):`<div class="empty">Nenhum pagamento previsto nesta semana.</div>`}${recTotal?`<div class="week-revenue"><span><b>Receitas da semana</b><small>Entradas previstas no período</small></span><strong class="positive">+ ${money(recTotal)}</strong></div>`:''}</div>
+      <div class="finance-week-footer"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Caixa considerado</small><b>${money(idx===0?cash:0)}</b></div><div><small>Saldo da semana</small><b class="${weekDebt?'negative':'positive'}">${money(weekDebt)}</b></div><div><small>Busca diária</small><b>${money(daily)}</b><span>${activeDays.length} dia(s)</span></div></div>
     </section>`;
   }).join('');
-
-  layout('Calendário Financeiro',`
-    <div class="page-intro calendar-intro"><div><span class="eyebrow">FLUXO FINANCEIRO</span><h2>${monthName(month)} de ${yearKey(month)}</h2><p>Visão mensal organizada em semanas de segunda a domingo. Aqui aparecem somente pagamentos e receitas.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(month)}</b><button class="btn secondary" data-month-next>›</button></div></div>
-    <div class="grid compact-kpis calendar-kpis"><div class="card"><div class="label">Em caixa</div><div class="value ${cash>=0?'positive':'negative'}">${money(cash)}</div><small>Disponível para cobertura</small></div><div class="card"><div class="label">Total a pagar</div><div class="value negative">${money(totalPay)}</div><small>Compromissos em aberto</small></div><div class="card"><div class="label">Receitas previstas</div><div class="value positive">${money(totalRec)}</div><small>Receitas ainda não recebidas</small></div><div class="card"><div class="label">Saldo a buscar</div><div class="value ${remainingToCover?'negative':'positive'}">${money(remainingToCover)}</div><small>Total a pagar − caixa − receitas</small></div><div class="card highlight"><div class="label">Busca diária</div><div class="value">${money(dailyNeed)}</div><small>${availableDays.length} dia(s) disponíveis • ${monthStatus}</small></div></div>
-    <div class="calendar-note"><b>Regra do calendário:</b> pagamentos em aberto aumentam o saldo a buscar; dinheiro já em caixa e receitas previstas reduzem esse saldo. Ao registrar/receber uma receita, pagar uma conta, editar um vencimento ou marcar uma folga, a busca diária é recalculada.</div>
-    <div class="calendar-toolbar"><div><b>Organização do mês</b><span>Realocar permite mover um pagamento para outra semana sem alterar sua data de vencimento.</span></div><button class="btn secondary" data-manage-days-off>Gerenciar folgas</button></div>
-    <div class="finance-weeks">${weekHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
+  layout('Calendário Financeiro',`<div class="page-intro calendar-intro"><div><span class="eyebrow">FLUXO FINANCEIRO</span><h2>${monthName(month)} de ${yearKey(month)}</h2><p>Lista de pagamentos por semana e credor. O fechamento abaixo mostra exatamente quanto está coberto e quanto ainda precisa ser buscado.</p></div><div class="month-nav"><button class="btn secondary" data-month-prev>‹</button><b>${monthName(month)}</b><button class="btn secondary" data-month-next>›</button></div></div>
+  <div class="finance-summary-banner"><div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong></div><div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong></div><div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong></div><div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(dailyNeed)}</strong><span>${remainingDays} dia(s) disponíveis</span></div></div>
+  <div class="calendar-note">O saldo devedor é o total a pagar menos o caixa disponível. A diária é recalculada automaticamente quando qualquer pagamento, receita, vencimento ou dia de folga é alterado.</div>
+  <div class="finance-weeks">${weekHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
 }
-
 function cashbook(){
   db.cashbooks=db.cashbooks||[]; let c=db.cashbooks.find(x=>x.date===today()); if(!c){c={id:uid(),date:today(),openedAt:new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),closedAt:null,entries:[],closingTransactionId:null};db.cashbooks.push(c);save();}
   const entries=c.entries||[], ins=entries.filter(x=>x.type==='entrada').reduce((a,x)=>a+num(x.value),0), outs=entries.filter(x=>x.type==='saida').reduce((a,x)=>a+num(x.value),0), net=ins-outs;
@@ -493,7 +522,14 @@ function cashbook(){
   layout('Livro Caixa',`<div class="page-intro cash-intro"><div><span class="eyebrow">LIVRO CAIXA DIÁRIO</span><h2>${fmtDate(today())}</h2><p>O formulário já está aberto. Registre tudo que realmente entrou ou saiu hoje.</p></div><div class="cash-result ${net>=0?'positive':'negative'}"><small>RESULTADO DO DIA</small><b>${money(net)}</b><span>${c.closedAt?'Fechado':'Em aberto'}</span></div></div><div class="grid compact-kpis"><div class="card"><div class="label">Saldo de abertura</div><div class="value">${money(num(db.balance))}</div></div><div class="card"><div class="label">Entradas</div><div class="value positive">${money(ins)}</div></div><div class="card"><div class="label">Saídas</div><div class="value negative">${money(outs)}</div></div><div class="card"><div class="label">Saldo líquido</div><div class="value ${net>=0?'positive':'negative'}">${money(net)}</div></div></div>${form}<div class="card data-card"><div class="section-head"><div><h3>Movimentações de hoje</h3><p>Ao fechar o caixa, o resultado líquido do dia é consolidado no histórico.</p></div>${c.closedAt?'':`<button class="btn danger" data-close-cash>Fechar caixa</button>`}</div>${rows?table(rows,['Hora','Tipo','Descrição','Origem / destino','Valor','Ações']):'<div class="empty">Nenhum movimento registrado hoje.</div>'}</div>`);
   const f=$('#quick-cash-form'); if(f)f.onsubmit=e=>{e.preventDefault();const type=$('#qc-type').value,value=num($('#qc-value').value),description=$('#qc-desc').value.trim(),source=$('#qc-source').value.trim(),link=$('#qc-link').value;const entry={id:uid(),type,value,description,source,category:link==='emprestimo'?'Empréstimo recebido':link==='cartao'?'Cartão de crédito':'Livro Caixa',note:'',time:new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})};c.entries.push(entry);if(link==='emprestimo'&&type==='entrada'){const loanId=uid();db.loans.push({id:loanId,person:source||description,value,installments:1,installmentValue:value,totalPayable:value,firstDate:today(),status:'recebido',paymentSource:'Caixa',note:'Criado a partir do Livro Caixa',createdAt:today()});db.debts.push({id:uid(),loanId,creditor:source||description,kind:'Empréstimo',value,totalPayable:value,installments:1,installmentValue:value,firstDate:today(),status:'ativo',remaining:value,paymentSource:'Caixa',createdAt:today()});db.transactions.push({id:uid(),date:today(),value,category:'Empréstimo recebido',person:source||description,paymentSource:'Caixa',status:'pago',weekAssigned:weekOf(today()),type:'receita',loanId,loanPrincipal:true});}save();toast('Movimento registrado');cashbook()};
 }
-function render(v=view){view=v;const fn={dashboard:unifiedDashboard,caixa:cashbook,movimentos:()=>debtsExpenses('geral'),cartoes:()=>debtsExpenses('cartoes'),emprestimos:()=>debtsExpenses('emprestimos'),receitas:()=>receitasPage(),planejamento:planning,calendario:calendar,relatorios:reports,config};(fn[v]||unifiedDashboard)();document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===v))}
+
+function suporte(){
+  layout('Suporte',`<div class="page-intro"><div><span class="eyebrow">ATENDIMENTO</span><h2>Central de suporte</h2><p>Converse diretamente com a equipe. O prazo padrão de resposta é de até 72 horas.</p></div></div><div class="support-layout-client"><section class="card"><div class="support-compose-head"><div><h3>Novo atendimento</h3><p>Abra um chamado e acompanhe tudo em uma conversa.</p></div></div><form id="support-form" class="form"><div class="field"><label>Assunto</label><input id="st-subject" required placeholder="Ex.: compra no cartão não apareceu"></div><div class="field"><label>Categoria</label><select id="st-category"><option>financeiro</option><option>cartão</option><option>empréstimo</option><option>problema técnico</option><option>outro</option></select></div><div class="field"><label>Prioridade</label><select id="st-priority"><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></div><div class="field"><label>Mensagem</label><textarea id="st-body" required placeholder="Explique o que aconteceu..."></textarea></div><button class="btn primary">Abrir atendimento</button></form></section><section class="card"><div class="section-head"><div><h3>Meus atendimentos</h3><p>As respostas chegam em tempo real.</p></div></div><div id="support-list">Carregando...</div></section></div>`);
+  const loadTickets=async()=>{const u=(await supabaseClient.auth.getUser()).data.user;const r=await supabaseClient.from('support_tickets').select('*').eq('user_id',u.id).order('created_at',{ascending:false});const el=$('#support-list');if(r.error){el.textContent=r.error.message;return}el.innerHTML=r.data?.length?r.data.map(t=>`<button class="client-ticket" data-support-ticket="${t.id}"><span><b>${esc(t.subject)}</b><small>${esc(t.category)} • ${fmtDate(t.created_at)} • SLA ${fmtDate(t.sla_due_at)}</small></span><em>${esc(t.status)}</em></button>`).join(''):'<div class="empty">Nenhum atendimento aberto.</div>';document.querySelectorAll('[data-support-ticket]').forEach(b=>b.onclick=()=>openClientSupportChat(b.dataset.supportTicket));};
+  $('#support-form').onsubmit=async e=>{e.preventDefault();const u=(await supabaseClient.auth.getUser()).data.user;const r=await supabaseClient.from('support_tickets').insert({user_id:u.id,subject:$('#st-subject').value.trim(),category:$('#st-category').value,priority:$('#st-priority').value}).select().single();if(r.error)return toast(r.error.message);const m=await supabaseClient.from('support_messages').insert({ticket_id:r.data.id,sender_user_id:u.id,body:$('#st-body').value.trim(),message_type:'text'});if(m.error)return toast(m.error.message);$('#st-body').value='';toast('Atendimento aberto. A equipe responderá em até 72 horas.');loadTickets();};loadTickets();
+}
+async function openClientSupportChat(ticketId){const r=await supabaseClient.from('support_messages').select('*').eq('ticket_id',ticketId).order('created_at');const msgs=r.data||[];const me=(await supabaseClient.auth.getUser()).data.user;const el=document.createElement('div');el.className='modal';el.innerHTML=`<div class="modal-card support-chat-client"><div class="chat-head"><div><span class="eyebrow">ATENDIMENTO RAQVOR</span><h3>Conversa</h3></div><button class="btn secondary" id="close-chat">×</button></div><div class="chat-messages" id="client-chat-messages">${msgs.map(m=>`<div class="chat-bubble ${m.sender_user_id===me.id?'mine':'theirs'}">${esc(m.body||'Mensagem de voz')}<small>${fmtDate(m.created_at)}</small></div>`).join('')}</div><form id="client-chat-form"><input id="client-chat-input" placeholder="Digite sua mensagem..."><button class="btn primary">Enviar</button></form></div>`;document.body.appendChild(el);el.querySelector('#close-chat').onclick=()=>el.remove();el.querySelector('#client-chat-form').onsubmit=async e=>{e.preventDefault();const u=(await supabaseClient.auth.getUser()).data.user;const body=$('#client-chat-input').value.trim();if(!body)return;await supabaseClient.from('support_messages').insert({ticket_id:ticketId,sender_user_id:u.id,body,message_type:'text'});el.remove();openClientSupportChat(ticketId)}}
+function render(v=view){view=v;const fn={dashboard:unifiedDashboard,caixa:cashbook,movimentos:()=>debtsExpenses('geral'),cartoes:()=>debtsExpenses('cartoes'),emprestimos:()=>debtsExpenses('emprestimos'),receitas:()=>receitasPage(),planejamento:planning,calendario:calendar,relatorios:reports,suporte,config,recorrentes:recurring};try{(fn[v]||unifiedDashboard)();document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===v))}catch(err){console.error('[RAQVOR][VIEW]',v,err);const c=$('#content');if(c)c.innerHTML=`<div class="card error-card"><span class="eyebrow">ERRO DE MÓDULO</span><h2>Não foi possível abrir esta seção.</h2><p>${esc(err?.message||'Erro inesperado.')}</p><div class="actions"><button class="btn primary" onclick="location.reload()">Recarregar</button><button class="btn secondary" data-view="dashboard">Voltar ao Dashboard</button></div></div>`;bindGlobal()}}
 function bindGlobal(){
   // Navigation
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{render(b.dataset.view);$('#sidebar')?.classList.remove('open')});
@@ -522,32 +558,243 @@ function bindGlobal(){
   // Final UX tabs
   document.querySelectorAll('[data-dd-tab]').forEach(b=>b.onclick=()=>debtsExpenses(b.dataset.ddTab));
   document.querySelectorAll('[data-card-tab]').forEach(b=>b.onclick=()=>debtsExpenses('cartoes',b.dataset.cardTab));
-  document.querySelectorAll('[data-move-week]').forEach(sel=>sel.onchange=()=>{
-    const x=db.transactions.find(z=>z.id===sel.dataset.moveWeek);
-    if(!x)return;
-    x.weekAssigned=Number(sel.value)||null;
-    save();
-    toast(`Pagamento/receita realocado para a Semana ${sel.value}`);
-    calendar(calendarCursor);
-  });
-  document.querySelectorAll('[data-manage-days-off]').forEach(b=>b.onclick=()=>{
-    const day=prompt('Informe a data da folga no formato AAAA-MM-DD. Deixe vazio para cancelar:');
-    if(!day)return;
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(day)){toast('Data inválida');return;}
-    const idx=db.settings.daysOff.indexOf(day);
-    if(idx>=0){db.settings.daysOff.splice(idx,1);toast('Folga removida')}else{db.settings.daysOff.push(day);db.settings.daysOff.sort();toast('Folga adicionada')}
-    save();calendar(calendarCursor);
-  });
+}
+
+window.addEventListener('load',()=>initSupabase().catch(err=>{console.error('[RAQVOR][BOOT]',err);showAuth('login','Não foi possível iniciar o RAQVOR: '+authErrorMessage(err));}));
+
+/* ==========================================================
+   RAQVOR V2.13 — DESKTOP OPERACIONAL
+   Caixa com meios de recebimento, credores, cartões separados,
+   calendário financeiro consolidado, suporte IA/especialista e
+   configurações comerciais.
+   ========================================================== */
+function cashOpening(c){return {cash:num(c?.openingCash),pix:num(c?.openingPix),card:num(c?.openingCard)}}
+function ensureCashbookToday(){
+  db.cashbooks=db.cashbooks||[];
+  let c=db.cashbooks.find(x=>x.date===today());
+  if(!c){c={id:uid(),date:today(),openedAt:null,closedAt:null,openingCash:0,openingPix:0,openingCard:0,entries:[],closingTransactionId:null};db.cashbooks.push(c)}
+  c.entries=Array.isArray(c.entries)?c.entries:[];
+  return c;
+}
+function openCashDialog(){
+  const c=ensureCashbookToday();
+  if(c.openedAt){cashbook();return}
+  const el=document.createElement('div');el.className='modal open';
+  el.innerHTML=`<div class="modal-card cash-open-modal"><div class="profile-head"><div><span class="eyebrow">ABERTURA DO CAIXA</span><h2>Informe o saldo inicial</h2><p>Registre separadamente o que existe hoje em dinheiro, Pix e na máquina de cartão.</p></div><button class="close" id="cash-open-close">×</button></div><form id="cash-open-form" class="form"><div class="cash-opening-grid"><div class="field"><label>Dinheiro</label><input id="open-cash" type="number" step="0.01" min="0" value="${c.openingCash||''}" placeholder="0,00"></div><div class="field"><label>Pix</label><input id="open-pix" type="number" step="0.01" min="0" value="${c.openingPix||''}" placeholder="0,00"></div><div class="field"><label>Cartão / máquina</label><input id="open-card" type="number" step="0.01" min="0" value="${c.openingCard||''}" placeholder="0,00"></div></div><div class="cash-open-total"><span>Total de abertura</span><b id="open-total">${money(num(c.openingCash)+num(c.openingPix)+num(c.openingCard))}</b></div><div class="actions"><button class="btn primary">Abrir Caixa</button><button type="button" class="btn secondary" id="cash-open-cancel">Cancelar</button></div></form></div>`;
+  document.body.appendChild(el);
+  const calc=()=>{$('#open-total').textContent=money(num($('#open-cash').value)+num($('#open-pix').value)+num($('#open-card').value))};
+  ['#open-cash','#open-pix','#open-card'].forEach(x=>$(x).addEventListener('input',calc));
+  $('#cash-open-close').onclick=()=>el.remove();$('#cash-open-cancel').onclick=()=>el.remove();
+  $('#cash-open-form').onsubmit=e=>{e.preventDefault();c.openingCash=num($('#open-cash').value);c.openingPix=num($('#open-pix').value);c.openingCard=num($('#open-card').value);c.openedAt=new Date().toISOString();save();el.remove();toast('Caixa aberto com sucesso.');cashbook()};
+}
+function paymentMath(method,entered,mode){
+  const v=num(entered);if(method==='pix'||method==='dinheiro')return{rate:0,charged:v,received:v,fee:0};
+  const rate=method==='credito'?0.05:0.03;
+  if(mode==='liquido'){const charged=v/(1-rate);return{rate,charged,received:v,fee:charged-v}}
+  return{rate,charged:v,received:v*(1-rate),fee:v*rate};
+}
+function cashbook(){
+  const c=ensureCashbookToday();
+  const entries=c.entries||[];
+  const opening=cashOpening(c), openingTotal=opening.cash+opening.pix+opening.card;
+  const ins=entries.filter(x=>x.type==='entrada').reduce((a,x)=>a+num(x.receivedValue??x.value),0);
+  const outs=entries.filter(x=>x.type==='saida').reduce((a,x)=>a+num(x.value),0);
+  const net=openingTotal+ins-outs;
+  const byMethod=['dinheiro','pix','credito','debito'].map(m=>[m,entries.filter(x=>x.type==='entrada'&&x.method===m).reduce((a,x)=>a+num(x.receivedValue??x.value),0)]);
+  const rows=entries.slice().reverse().map(x=>`<tr><td>${esc(x.time||'—')}</td><td><span class="flow-badge ${x.type}">${x.type==='entrada'?'Entrada':'Saída'}</span></td><td>${esc(x.description||'—')}</td><td>${esc(x.methodLabel||'—')}</td><td>${x.type==='entrada'?`<small>cobrado ${money(x.chargedValue??x.value)}</small>`:'—'}</td><td class="${x.type==='entrada'?'positive':'negative'}">${x.type==='entrada'?'+':'−'} ${money(x.type==='entrada'?(x.receivedValue??x.value):x.value)}</td><td>${c.closedAt?'<span class="pill paid">Fechado</span>':`<button class="btn secondary mini" data-edit-cash-entry="${x.id}">Editar</button><button class="btn danger mini" data-del-cash-entry="${x.id}">Excluir</button>`}</td></tr>`).join('');
+  layout('Livro Caixa',`<div class="page-intro cash-intro"><div><span class="eyebrow">LIVRO CAIXA</span><h2>${fmtDate(today())}</h2><p>${c.openedAt?'Caixa aberto. Registre cada entrada ou saída pelo meio correto.':'O caixa ainda não foi aberto.'}</p></div><div class="cash-result ${net>=0?'positive':'negative'}"><small>CAIXA REAL</small><b>${money(net)}</b><span>${c.closedAt?'Fechado':'Em aberto'}</span></div></div>
+    ${!c.openedAt?`<div class="card cash-open-cta"><div><span class="eyebrow">INÍCIO DO DIA</span><h3>Abrir Caixa</h3><p>Informe dinheiro, Pix e saldo disponível na máquina de cartão.</p></div><button class="btn primary" data-open-cash>+ Abrir Caixa</button></div>`:`<><div class="grid compact-kpis"><div class="card"><div class="label">Abertura</div><div class="value">${money(openingTotal)}</div></div><div class="card"><div class="label">Entradas líquidas</div><div class="value positive">${money(ins)}</div></div><div class="card"><div class="label">Saídas</div><div class="value negative">${money(outs)}</div></div><div class="card"><div class="label">Saldo do caixa</div><div class="value ${net>=0?'positive':'negative'}">${money(net)}</div></div></div>
+    <div class="cash-method-grid">${byMethod.map(([m,v])=>`<div class="cash-method"><span>${m==='dinheiro'?'Dinheiro':m==='pix'?'Pix':m==='credito'?'Crédito':'Débito'}</span><b>${money(v)}</b></div>`).join('')}</div>
+    ${c.closedAt?'':`<div class="card cash-form-card"><div class="section-head"><div><span class="eyebrow">MOVIMENTO</span><h3>Registrar entrada ou saída</h3><p>Cartão calcula automaticamente taxa de 5% no crédito e 3% no débito.</p></div></div><form id="quick-cash-v213" class="quick-cash-v213"><select id="c13-type"><option value="entrada">Entrada</option><option value="saida">Saída</option></select><select id="c13-method"><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="credito">Cartão de crédito</option><option value="debito">Cartão de débito</option></select><select id="c13-mode"><option value="liquido">Quero receber o valor líquido informado</option><option value="cobrado">O valor informado já é o total cobrado</option></select><input id="c13-value" type="number" step="0.01" min="0" placeholder="Valor" required><input id="c13-desc" placeholder="Descrição" required><input id="c13-source" placeholder="Origem / destino"><div class="calc-box" id="c13-calc">Recebido: ${money(0)}</div><button class="btn primary">Registrar</button></form></div>`}</>`}
+    <div class="card data-card"><div class="section-head"><div><h3>Movimentações de hoje</h3><p>O valor efetivamente recebido ou pago é o que altera o caixa.</p></div>${c.openedAt&&!c.closedAt?`<button class="btn danger" data-close-cash>Fechar Caixa</button>`:''}</div>${rows?table(rows,['Hora','Tipo','Descrição','Meio','Cobrado','Valor real','Ações']):'<div class="empty">Nenhum movimento registrado hoje.</div>'}</div>`);
+  const f=$('#quick-cash-v213');
+  if(f){const calc=()=>{const method=$('#c13-method').value,mode=$('#c13-mode').value,pm=paymentMath(method,$('#c13-value').value,mode);$('#c13-calc').innerHTML=`Cobrado: <b>${money(pm.charged)}</b> · Recebido: <b>${money(pm.received)}</b> · Taxa: ${money(pm.fee)}`;$('#c13-mode').disabled=$('#c13-type').value==='saida'||method==='pix'||method==='dinheiro';if($('#c13-type').value==='saida')$('#c13-calc').textContent='Saída: o valor informado será descontado integralmente do caixa.'};['#c13-value','#c13-method','#c13-mode','#c13-type'].forEach(x=>$(x).addEventListener('input',calc));f.onsubmit=e=>{e.preventDefault();const type=$('#c13-type').value,method=type==='saida'?'saida':$('#c13-method').value,mode=$('#c13-mode').value,raw=num($('#c13-value').value),pm=type==='saida'?{charged:raw,received:0,fee:0,rate:0}:paymentMath(method,raw,mode);const labels={pix:'Pix',dinheiro:'Dinheiro',credito:'Cartão de crédito',debito:'Cartão de débito'};c.entries.push({id:uid(),type:type==='saida'?'saida':'entrada',method:type==='saida'?'saida':method,methodLabel:type==='saida'?'Saída':labels[method],value:type==='saida'?raw:pm.charged,chargedValue:type==='saida'?raw:pm.charged,receivedValue:type==='saida'?0:pm.received,fee:type==='saida'?0:pm.fee,description:$('#c13-desc').value.trim(),source:$('#c13-source').value.trim(),time:new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})});save();toast(type==='saida'?'Saída registrada.':'Entrada registrada.');cashbook()};calc()}
+}
+function closeCashToday(){const c=ensureCashbookToday();if(!c.openedAt||c.closedAt)return;const net=cashOpening(c).cash+cashOpening(c).pix+cashOpening(c).card+c.entries.filter(x=>x.type==='entrada').reduce((a,x)=>a+num(x.receivedValue??x.value),0)-c.entries.filter(x=>x.type==='saida').reduce((a,x)=>a+num(x.value),0);c.closedAt=new Date().toISOString();c.net=net;save();toast('Caixa fechado.');cashbook()}
+
+function creditorRecords(){
+  const list=Array.isArray(db.creditors)?db.creditors:[];const derived=[];
+  db.debts.forEach(d=>derived.push({name:d.creditor,type:d.kind||'Credor'}));db.loans.forEach(l=>derived.push({name:l.person,type:'Instituição/Pessoa'}));
+  for(const d of derived){if(d.name&&!list.some(x=>x.name.toLowerCase()===d.name.toLowerCase()))list.push({id:uid(),name:d.name,type:d.type})}
+  db.creditors=list;return list;
+}
+function debtTotalsForCreditor(name){const tx=db.transactions.filter(x=>(x.person||'').trim().toLowerCase()===name.trim().toLowerCase()&&x.type==='despesa'&&x.status!=='pago');return{monthly:tx.reduce((a,x)=>a+num(x.value),0),count:tx.length}}
+function registerDebtExpenseDialog(){
+  const el=document.createElement('div');el.className='modal open';el.innerHTML=`<div class="modal-card register-modal"><div class="profile-head"><div><span class="eyebrow">NOVO REGISTRO</span><h2>O que você deseja registrar?</h2><p>Escolha o tipo. O RAQVOR abrirá somente os campos necessários.</p></div><button class="close" id="reg-close">×</button></div><div class="register-choice-grid"><button data-reg="payment"><b>Pagamento</b><small>Registre algo que já foi pago.</small></button><button data-reg="expense"><b>Despesa / dívida</b><small>Crie um compromisso a pagar.</small></button><button data-reg="loan"><b>Empréstimo</b><small>Recebido ou concedido, com parcelas.</small></button><button data-reg="recurring"><b>Recorrente</b><small>Mesmo valor e dia todos os meses.</small></button><button data-reg="card"><b>Compra no cartão</b><small>Parcelada ou à vista.</small></button><button data-reg="creditor"><b>Novo credor</b><small>Pessoa ou instituição.</small></button></div></div>`;document.body.appendChild(el);$('#reg-close').onclick=()=>el.remove();el.querySelectorAll('[data-reg]').forEach(b=>b.onclick=()=>{const k=b.dataset.reg;el.remove();if(k==='loan')loanForm();else if(k==='card')cardForm();else if(k==='recurring')recurring();else if(k==='creditor')creditorForm();else transactionForm(k==='payment'?'despesa':'despesa')})
+}
+function creditorForm(id=null){const c=(db.creditors||[]).find(x=>x.id===id);const el=document.createElement('div');el.className='modal open';el.innerHTML=`<div class="modal-card"><div class="profile-head"><div><span class="eyebrow">CREDOR</span><h2>${c?'Editar':'Cadastrar'} credor</h2></div><button class="close" id="cf-close">×</button></div><form id="cf-form" class="form"><div class="field"><label>Nome</label><input id="cf-name" required value="${esc(c?.name||'')}"></div><div class="field"><label>Tipo</label><select id="cf-type"><option>Pessoa</option><option>Instituição</option></select></div><div class="actions"><button class="btn primary">Salvar</button></div></form></div>`;document.body.appendChild(el);$('#cf-close').onclick=()=>el.remove();$('#cf-form').onsubmit=e=>{e.preventDefault();const name=$('#cf-name').value.trim();if(!name)return;db.creditors=db.creditors||[];if(c)Object.assign(c,{name,type:$('#cf-type').value});else db.creditors.push({id:uid(),name,type:$('#cf-type').value});save();el.remove();toast('Credor salvo.');debtsExpenses('creditors')};if(c)$('#cf-type').value=c.type||'Pessoa'}
+function cardPage(){
+  const cards=db.cards||[];const total=cards.reduce((a,c)=>a+db.transactions.filter(x=>x.cardId===c.id&&x.type==='despesa'&&x.status!=='pago').reduce((s,x)=>s+num(x.value),0),0);
+  const cardsHtml=cards.map(c=>{const tx=db.transactions.filter(x=>x.cardId===c.id&&x.type==='despesa').sort((a,b)=>a.date.localeCompare(b.date));const open=tx.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);return `<section class="entity-card"><div class="entity-card-head"><div><span class="eyebrow">CARTÃO</span><h3>${esc(c.name)}</h3><p>${esc(c.bank||'')} · vence dia ${c.due||'—'}</p></div><div><b>${money(open)}</b><small>em aberto</small></div></div><div class="entity-metrics"><span>Limite <b>${money(c.limit)}</b></span><span>Disponível <b>${money(Math.max(0,num(c.limit)-open))}</b></span><span>Fechamento <b>dia ${c.close||'—'}</b></span></div><div class="card-purchase-list">${tx.length?tx.map(x=>`<div><span><b>${esc(x.person||x.category||'Compra')}</b><small>${fmtDate(x.date)} · ${x.installment?`parcela ${x.installment}`:''}</small></span><strong>${money(x.value)}</strong></div>`).join(''):'<div class="empty">Nenhuma compra registrada.</div>'}</div><div class="actions"><button class="btn primary" data-card-purchase="${c.id}">+ Nova compra</button><button class="btn secondary" data-edit-card="${c.id}">Editar</button></div></section>`}).join('');
+  layout('Cartões de Crédito',`<div class="hero premium-hero"><div><small>CARTEIRA DE CARTÕES</small><h2>Cartões separados, sem mistura.</h2><small>Compras e parcelas ficam dentro do cartão correto.</small></div><div class="side"><small>COMPROMISSOS EM CARTÕES</small><br><b>${money(total)}</b></div></div><div class="actions"><button class="btn primary" data-new-card>+ Cadastrar cartão</button></div><div class="entity-grid">${cardsHtml||'<div class="empty">Nenhum cartão cadastrado.</div>'}</div>`)
+}
+function debtsExpenses(mode='overview'){
+  creditorRecords();
+  if(mode==='cartoes')return cardPage();
+  if(mode==='creditors'){
+    const cards=(db.creditors||[]).map(c=>{const tx=db.transactions.filter(x=>(x.person||'').trim().toLowerCase()===c.name.trim().toLowerCase()&&x.type==='despesa');const monthly=tx.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);const total=tx.reduce((a,x)=>a+num(x.value),0);return `<button class="creditor-card" data-creditor="${esc(c.id)}"><div><span class="creditor-avatar">${esc(c.name.charAt(0).toUpperCase())}</span><span><b>${esc(c.name)}</b><small>${esc(c.type||'Credor')}</small></span></div><strong>${money(monthly)}<small>mensal em aberto</small></strong><em>${tx.length} lançamentos</em></button>`}).join('');
+    layout('Credores',`<div class="section-head"><div><span class="eyebrow">CREDORES</span><h2>Uma conta por credor</h2><p>Ao abrir um credor, todas as dívidas aparecem separadas por compromisso e data.</p></div><button class="btn primary" data-new-creditor>+ Novo credor</button></div><div class="creditor-list">${cards||'<div class="empty">Nenhum credor cadastrado.</div>'}</div><div class="card debt-chart"><h3>Onde está a maior parcela mensal?</h3><div>${(db.creditors||[]).sort((a,b)=>debtTotalsForCreditor(b.name).monthly-debtTotalsForCreditor(a.name).monthly).slice(0,8).map(c=>{const v=debtTotalsForCreditor(c.name).monthly;return `<div class="bar-row"><span>${esc(c.name)}</span><div><i style="width:${Math.min(100,v/(Math.max(1,...(db.creditors||[]).map(z=>debtTotalsForCreditor(z.name).monthly)))*100)}%"></i></div><b>${money(v)}</b></div>`}).join('')}</div></div>`);return;
+  }
+  const tx=db.transactions.filter(x=>x.type==='despesa').sort((a,b)=>a.date.localeCompare(b.date));
+  const open=tx.filter(x=>x.status!=='pago').reduce((a,x)=>a+num(x.value),0);const recurringOpen=(db.recurring||[]).filter(x=>x.active&&x.type==='despesa').reduce((a,x)=>a+num(x.value),0);const finished=db.debts.filter(d=>debtRemaining(d.id)<=0).length;
+  const rows=tx.map(x=>`<tr><td>${fmtDate(x.date)}</td><td>${esc(x.person||x.category||'—')}</td><td>${esc(x.category||'—')}</td><td>${money(x.value)}</td><td>${statusPill(x.status,x.priority)}</td><td><button class="btn secondary" data-edit="${x.id}">Editar</button></td></tr>`).join('');
+  layout('Dívidas e Despesas',`<div class="hero premium-hero"><div><small>CONTROLE DE COMPROMISSOS</small><h2>O centro de tudo que existe a pagar.</h2><small>Credores, parcelas, recorrentes e compromissos em uma visão organizada.</small></div><div class="side"><small>EM ABERTO</small><br><b>${money(open)}</b><br><small>${finished} dívidas quitadas</small></div></div><div class="debt-kpi-grid"><div class="card"><span>Parcelados / com término</span><b>${money(open-recurringOpen)}</b><small>compromissos com prazo</small></div><div class="card"><span>Recorrentes</span><b>${money(recurringOpen)}</b><small>sem prazo de término</small></div><div class="card"><span>Credores</span><b>${db.creditors.length}</b><small>pessoas e instituições</small></div><div class="card"><span>Total em aberto</span><b>${money(open)}</b><small>próximos pagamentos</small></div></div><div class="actions"><button class="btn primary" data-register-debt>+ Registrar pagamento ou dívida</button><button class="btn secondary" data-new-creditor>+ Novo credor</button><button class="btn secondary" data-view="cartoes">Cartões de crédito</button></div><div class="debt-tabs"><button class="tab active" data-dd-tab="overview">Visão geral</button><button class="tab" data-dd-tab="creditors">Credores</button><button class="tab" data-dd-tab="cartoes">Cartões</button><button class="tab" data-view="recorrentes">Recorrentes</button></div><div class="card"><div class="section-head"><div><h3>Todos os pagamentos cadastrados</h3><p>A data de vencimento é a data usada no Calendário Financeiro.</p></div></div>${table(rows,['Vencimento','Credor','Categoria','Parcela/valor','Status','Ação'])}</div>`)
+}
+function registerDebtEvents(){document.querySelectorAll('[data-register-debt]').forEach(b=>b.onclick=registerDebtExpenseDialog);document.querySelectorAll('[data-new-creditor]').forEach(b=>b.onclick=()=>creditorForm());document.querySelectorAll('[data-creditor]').forEach(b=>b.onclick=()=>creditorDetail(b.dataset.creditor))}
+function creditorDetail(id){const c=(db.creditors||[]).find(x=>x.id===id);if(!c)return;const tx=db.transactions.filter(x=>(x.person||'').trim().toLowerCase()===c.name.trim().toLowerCase()).sort((a,b)=>a.date.localeCompare(b.date));const rows=tx.map(x=>`<tr><td>${fmtDate(x.date)}</td><td>${esc(x.category||'—')}</td><td>${esc(x.note||'—')}</td><td>${money(x.value)}</td><td>${statusPill(x.status)}</td></tr>`).join('');layout('Credor · '+c.name,`<div class="subnav"><button class="btn secondary" data-view="movimentos">← Dívidas e Despesas</button><button class="btn secondary" data-view="cartoes">Cartões</button><button class="btn secondary" data-view="calendario">Calendário</button><button class="btn secondary" data-view="recorrentes">Recorrentes</button></div><div class="hero"><div><small>${esc(c.type||'CREDOR')}</small><h2>${esc(c.name)}</h2><small>${tx.length} lançamentos vinculados</small></div><div class="side"><small>EM ABERTO</small><br><b>${money(tx.filter(x=>x.status!=='pago'&&x.type==='despesa').reduce((a,x)=>a+num(x.value),0))}</b></div></div><div class="card">${table(rows,['Data de pagamento','Tipo','Descrição','Valor','Status'])}</div><div class="actions"><button class="btn secondary" data-view="movimentos">Voltar</button><button class="btn primary" data-edit-creditor="${c.id}">Editar credor</button></div>`)}
+function config(){layout('Configurações',`<div class="settings-shell"><div class="settings-intro"><div><span>RAQVOR</span><h2>Configurações</h2><p>O nome RAQVOR é fixo. Aqui você personaliza apenas o que muda a organização financeira.</p></div><div class="settings-badge">● sincronizado</div></div><form id="cfg" class="settings-grid"><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">R</div><div><h3>Identidade</h3><p>O nome comercial do aplicativo é imutável.</p></div></div><div class="form settings-form"><div class="field"><label>Nome do aplicativo</label><input value="RAQVOR" disabled></div><div class="field"><label>Moeda</label><select id="currency"><option value="BRL">R$ — Real brasileiro</option><option value="USD">$ — Dólar americano</option><option value="EUR">€ — Euro</option></select></div></div></section><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">◎</div><div><h3>Ciclo financeiro</h3><p>Defina a data de início e a duração usada nas projeções.</p></div></div><div class="form settings-form"><div class="field"><label>Primeiro dia do ciclo</label><input id="cycleStart" type="number" min="1" max="31" value="${db.settings.cycleStart||1}"></div><div class="field"><label>Período</label><select id="cycleLength"><option value="5">5 dias</option><option value="7">Semanal — 7 dias</option><option value="15">Quinzenal — 15 dias</option><option value="30">Mensal — 30 dias</option></select></div><div class="field"><label>Dias de folga para a busca diária</label><input id="daysOff" value="${esc((db.settings.daysOff||[]).join(', '))}" placeholder="Ex.: 01/09/2026, 07/09/2026"></div></div></section><section class="settings-card"><div class="settings-card-head"><div class="settings-icon">✓</div><div><h3>Pagamento da diária</h3><p>Por padrão a meta diária é dividida de domingo a domingo, sem folga.</p></div></div><div class="settings-note"><b>Regra atual</b><span>Somente os dias cadastrados em “Dias de folga” são retirados da contagem. Essa configuração altera o Desktop e é refletida no Mobile.</span></div></section><section class="settings-card danger-zone"><div class="settings-card-head"><div class="settings-icon">!</div><div><h3>Dados locais</h3><p>Use apenas se precisar limpar o cache deste dispositivo.</p></div></div><div class="actions"><button type="button" class="btn danger" id="reset-data">Limpar cache local</button></div></section><div class="actions full"><button class="btn primary">Salvar configurações</button></div></form></div>`);$('#currency').value=db.settings.currency||'BRL';$('#cycleLength').value=String(db.settings.cycleLength||30);$('#cfg').onsubmit=e=>{e.preventDefault();db.settings.currency=$('#currency').value;db.settings.cycleStart=Math.min(31,Math.max(1,num($('#cycleStart').value)||1));db.settings.cycleLength=num($('#cycleLength').value)||30;db.settings.daysOff=$('#daysOff').value.split(',').map(x=>x.trim()).filter(Boolean);save();toast('Configurações salvas.');render('config')};$('#reset-data').onclick=()=>{if(confirm('Limpar somente o cache local? Os dados do Supabase serão preservados.')){localStorage.removeItem(KEY);localStorage.removeItem(KEY+'_remote_updated_at');location.reload()}}}
+function calendar(){
+  const m=calendarCursor||currentMonth();
+  const first=iso(`${m}-01`);
+  const last=iso(`${m}-${String(new Date(first.getFullYear(),first.getMonth()+1,0).getDate()).padStart(2,'0')}`);
+  const todayKey=today();
+  db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];
+
+  const monthItems=db.transactions.filter(x=>monthKey(x.date)===m);
+  const pendingPay=monthItems.filter(x=>x.type==='despesa'&&x.status!=='pago');
+  const pendingRec=monthItems.filter(x=>x.type==='receita'&&x.status!=='pago');
+  const totalPay=pendingPay.reduce((a,x)=>a+num(x.value),0);
+  const cash=Math.max(0,currentBalance());
+  const debt=Math.max(0,totalPay-cash);
+
+  const horizonStart=monthKey(first)===currentMonth()?iso(todayKey):first;
+  let remainingDays=0;
+  for(let d=new Date(horizonStart);d<=last;d.setDate(d.getDate()+1)){
+    const k=ymd(d);
+    if(!db.settings.daysOff.includes(k)) remainingDays++;
+  }
+  remainingDays=Math.max(1,remainingDays);
+  const dailyNeed=debt/remainingDays;
+  const weeks=financialWeekRanges(m);
+
+  const recordHtml=(x)=>{
+    const isPaid=x.status==='pago';
+    const label=x.type==='receita'?'Receita':'Pagamento';
+    const cls=x.type==='receita'?'receive':'pay';
+    const amount=x.type==='receita'?`+ ${money(x.value)}`:`− ${money(x.value)}`;
+    return `<div class="calendar-record ${cls} ${isPaid?'is-paid':''}">
+      <div class="calendar-record-date"><b>${fmtDate(x.date)}</b><small>${label}</small></div>
+      <div class="calendar-record-main"><b>${esc(x.person||x.category||label)}</b><span>${esc(x.category||'Sem categoria')}${x.note?` · ${esc(x.note)}`:''}</span></div>
+      <strong class="${cls==='receive'?'positive':'negative'}">${amount}</strong>
+      <div class="calendar-record-status">${statusPill(x.status,x.priority)}</div>
+      <div class="calendar-record-actions">
+        ${!isPaid&&x.type==='despesa'?`<button class="btn primary mini" data-calendar-pay="${x.id}">Marcar pago</button>`:''}
+        <button class="btn secondary mini" data-calendar-move="${x.id}">Realocar</button>
+        <button class="btn secondary mini" data-edit="${x.id}">Editar</button>
+      </div>
+    </div>`;
+  };
+
+  const weekHtml=weeks.map((w,idx)=>{
+    const items=monthItems.filter(x=>w.days.includes(x.date)).sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='despesa'?-1:1));
+    const pay=items.filter(x=>x.type==='despesa'&&x.status!=='pago');
+    const rec=items.filter(x=>x.type==='receita');
+    const payTotal=pay.reduce((a,x)=>a+num(x.value),0);
+    const recTotal=rec.reduce((a,x)=>a+num(x.value),0);
+    const received=rec.filter(x=>x.status==='pago').reduce((a,x)=>a+num(x.value),0);
+    const weekOff=w.days.filter(d=>db.settings.daysOff.includes(d)).length;
+    const activeDays=w.days.filter(d=>d>=todayKey&&!db.settings.daysOff.includes(d)).length;
+    const weekRemaining=Math.max(0,payTotal-(idx===0?cash:0)-received);
+    const weekDaily=weekRemaining/Math.max(1,activeDays||1);
+    const current=w.days.includes(todayKey);
+    return `<section class="finance-week ${current?'current':''}">
+      <div class="finance-week-head">
+        <div><span class="eyebrow">SEMANA ${idx+1}${current?' • ATUAL':''}</span><h3>${fmtDate(w.start)} <span>até</span> ${fmtDate(w.end)}</h3></div>
+        <div class="week-head-metrics"><div><small>A pagar</small><b class="negative">${money(payTotal)}</b></div><div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div><div><small>Busca diária</small><b>${money(weekDaily)}</b></div></div>
+      </div>
+      <div class="calendar-week-toolbar"><span>${items.length} registro(s)${weekOff?` · ${weekOff} folga(s)`:''}</span><button class="btn secondary mini" data-calendar-folgas="${w.start}|${w.end}">Gerenciar folgas</button></div>
+      <div class="calendar-record-list">${items.length?items.map(recordHtml).join(''):'<div class="empty">Nenhum pagamento ou receita registrado nesta semana.</div>'}</div>
+      <div class="finance-week-footer">
+        <div><small>Total a pagar</small><b class="negative">${money(payTotal)}</b></div>
+        <div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div>
+        <div><small>Recebido</small><b class="positive">${money(received)}</b></div>
+        <div><small>Folgas</small><b>${weekOff}</b></div>
+        <div><small>Saldo necessário</small><b class="${weekRemaining?'negative':'positive'}">${money(weekRemaining)}</b></div>
+        <div><small>Busca diária</small><b>${money(weekDaily)}</b><span>${activeDays} dia(s) ativos</span></div>
+      </div>
+    </section>`;
+  }).join('');
+
+  layout('Calendário Financeiro',`<div class="page-intro calendar-intro">
+    <div><span class="eyebrow">CALENDÁRIO FINANCEIRO</span><h2>${monthName(m)} de ${yearKey(m)}</h2><p>Somente pagamentos e receitas. O mês é organizado em semanas de segunda a domingo.</p></div>
+    <div class="month-nav"><button class="btn secondary" id="cal-prev">‹</button><b>${monthName(m)}</b><button class="btn secondary" id="cal-next">›</button></div>
+  </div>
+  <div class="finance-summary-banner">
+    <div><small>EM CAIXA</small><strong class="positive">${money(cash)}</strong><span>saldo disponível</span></div>
+    <div><small>TOTAL A PAGAR</small><strong class="negative">${money(totalPay)}</strong><span>compromissos em aberto</span></div>
+    <div><small>SALDO DEVEDOR</small><strong class="${debt?'negative':'positive'}">${money(debt)}</strong><span>total a pagar − caixa</span></div>
+    <div><small>RECEITAS PREVISTAS</small><strong class="positive">${money(pendingRec.reduce((a,x)=>a+num(x.value),0))}</strong><span>entradas ainda não recebidas</span></div>
+    <div class="featured"><small>BUSCA DIÁRIA</small><strong>${money(dailyNeed)}</strong><span>${remainingDays} dia(s) ativos</span></div>
+  </div>
+  <div class="calendar-note"><b>Regra da busca:</b> receitas efetivamente recebidas aumentam o caixa e reduzem automaticamente o saldo devedor e a busca diária. Pagamentos marcados como pagos podem ser deduzidos do caixa quando você confirmar.</div>
+  <div class="finance-weeks">${weekHtml||'<div class="empty">Nenhum movimento neste mês.</div>'}</div>`);
+
+  $('#cal-prev')?.addEventListener('click',()=>{calendarCursor=shiftMonth(calendarCursor,-1);calendar(calendarCursor)});
+  $('#cal-next')?.addEventListener('click',()=>{calendarCursor=shiftMonth(calendarCursor,1);calendar(calendarCursor)});
+
+  document.querySelectorAll('[data-calendar-pay]').forEach(btn=>btn.addEventListener('click',()=>{
+    const x=db.transactions.find(t=>t.id===btn.dataset.calendarPay); if(!x||x.status==='pago')return;
+    const modal=`<div class="modal-overlay open" id="calendar-pay-modal"><div class="modal-card"><div class="section-head"><div><span class="eyebrow">CONFIRMAR PAGAMENTO</span><h3>Marcar como pago?</h3><p>${esc(x.person||x.category||'Pagamento')} · ${money(x.value)}</p></div><button class="close" id="calendar-pay-close">×</button></div><div class="card"><p>Deseja deduzir este valor do caixa disponível?</p><div class="actions"><button class="btn secondary" id="calendar-pay-no">Não, apenas marcar pago</button><button class="btn primary" id="calendar-pay-yes">Sim, deduzir do caixa</button></div></div></div></div>`;
+    document.body.insertAdjacentHTML('beforeend',modal);
+    const close=()=>$('#calendar-pay-modal')?.remove();$('#calendar-pay-close').onclick=close;
+    const finish=(deduct)=>{x.status='pago';x.paidAt=new Date().toISOString();x.cashDeducted=deduct;save();close();toast(deduct?'Pagamento pago e deduzido do caixa.':'Pagamento marcado como pago.');calendar(calendarCursor)};
+    $('#calendar-pay-no').onclick=()=>finish(false);$('#calendar-pay-yes').onclick=()=>finish(true);
+  }));
+
+  document.querySelectorAll('[data-calendar-move]').forEach(btn=>btn.addEventListener('click',()=>{
+    const x=db.transactions.find(t=>t.id===btn.dataset.calendarMove);if(!x)return;
+    const lastDate=String(new Date(first.getFullYear(),first.getMonth()+1,0).getDate()).padStart(2,'0');
+    const modal=`<div class="modal-overlay open" id="calendar-move-modal"><div class="modal-card"><div class="section-head"><div><span class="eyebrow">REALOCAR PAGAMENTO</span><h3>${esc(x.person||x.category||'Registro')}</h3><p>${money(x.value)} · ${fmtDate(x.date)}</p></div><button class="close" id="calendar-move-close">×</button></div><form id="calendar-move-form" class="form"><div class="field"><label>Nova data dentro de ${monthName(m)}</label><input id="calendar-move-date" type="date" min="${m}-01" max="${m}-${lastDate}" value="${x.date}" required></div><div class="actions"><button type="button" class="btn secondary" id="calendar-move-cancel">Cancelar</button><button class="btn primary">Salvar nova data</button></div></form></div></div>`;
+    document.body.insertAdjacentHTML('beforeend',modal);
+    const close=()=>$('#calendar-move-modal')?.remove();$('#calendar-move-close').onclick=close;$('#calendar-move-cancel').onclick=close;
+    $('#calendar-move-form').onsubmit=e=>{e.preventDefault();const d=$('#calendar-move-date').value;if(!d||monthKey(d)!==m)return toast('Escolha uma data dentro do mês selecionado.');x.date=d;x.weekAssigned=weekOf(iso(d));x.manuallyRelocated=true;save();close();toast('Pagamento realocado.');calendar(m)};
+  }));
+
+  document.querySelectorAll('[data-calendar-folgas]').forEach(btn=>btn.addEventListener('click',()=>{
+    const [start,end]=btn.dataset.calendarFolgas.split('|'),days=[];let d=iso(start),e=iso(end);while(d<=e){days.push(ymd(d));d.setDate(d.getDate()+1)}
+    const modal=`<div class="modal-overlay open" id="calendar-off-modal"><div class="modal-card"><div class="section-head"><div><span class="eyebrow">FOLGAS DA SEMANA</span><h3>Escolha os dias sem trabalho</h3><p>Folgas retiram o dia somente da divisão da busca diária.</p></div><button class="close" id="calendar-off-close">×</button></div><div class="calendar-off-list">${days.map(k=>`<label class="off-check"><input type="checkbox" data-calendar-off="${k}" ${db.settings.daysOff.includes(k)?'checked':''}><span>${new Intl.DateTimeFormat('pt-BR',{weekday:'long'}).format(iso(k))}</span><b>${fmtDate(k)}</b></label>`).join('')}</div><div class="actions"><button class="btn primary" id="calendar-off-save">Salvar folgas</button></div></div></div>`;
+    document.body.insertAdjacentHTML('beforeend',modal);
+    const close=()=>$('#calendar-off-modal')?.remove();$('#calendar-off-close').onclick=close;
+    $('#calendar-off-save').onclick=()=>{days.forEach(k=>{const checked=document.querySelector(`[data-calendar-off="${k}"]`)?.checked;if(checked&&!db.settings.daysOff.includes(k))db.settings.daysOff.push(k);if(!checked)db.settings.daysOff=db.settings.daysOff.filter(x=>x!==k)});save();close();toast('Folgas atualizadas.');calendar(m)};
+  }));
 }
 
 
-// RAQVOR Desktop V2.18.1 — inicialização obrigatória
-document.addEventListener('DOMContentLoaded', async ()=>{
-  try{
-    await initSupabase();
-  }catch(err){
-    console.error('[RAQVOR][BOOT]',err);
-    try{ showAuth('login','Não foi possível conectar ao serviço. Verifique a conexão e tente novamente.'); }
-    catch(authErr){ console.error('[RAQVOR][AUTH-SCREEN]',authErr); }
+function suporte(){
+  layout('Suporte',`<div class="support-premium"><div class="support-hero"><div><span class="eyebrow">CENTRAL RAQVOR</span><h2>Como podemos ajudar?</h2><p>Primeiro você pode conversar com o Assistente. Se preferir uma pessoa, selecione Especialista e o atendimento será encaminhado à Central Administrativa.</p></div><div class="support-switch"><button class="support-mode active" data-support-mode="ia">✦ Assistente</button><button class="support-mode" data-support-mode="especialista">◉ Especialista</button></div></div><div class="support-ai-card" id="support-ai-card"><div class="support-chat-head"><div class="support-avatar">✦</div><div><b>Assistente RAQVOR</b><small>triagem inteligente</small></div></div><div id="support-ai-log" class="support-ai-log"><div class="support-bubble theirs">Olá! Me diga o que aconteceu. Se você preferir falar diretamente com uma pessoa, escolha <b>Especialista</b>.</div></div><div class="support-quick"><button data-support-intent="problema técnico">Problema técnico</button><button data-support-intent="cartão ou pagamento">Cartão / pagamento</button><button data-support-intent="sincronização">Sincronização</button><button data-support-intent="conta ou acesso">Conta / acesso</button></div><form id="support-ai-form"><input id="support-ai-input" placeholder="Digite sua dúvida..." autocomplete="off"><button class="btn primary">Enviar</button></form></div><div class="support-specialist-card" id="support-specialist-card" hidden><div class="section-head"><div><span class="eyebrow">ATENDIMENTO HUMANO</span><h3>Falar com especialista</h3><p>Seu relato será enviado ao painel Admin e você acompanhará a conversa como no WhatsApp.</p></div></div><form id="specialist-form" class="form"><input id="sp-subject" placeholder="Assunto" required><select id="sp-category"><option>financeiro</option><option>cartão</option><option>empréstimo</option><option>problema técnico</option><option>conta</option><option>outro</option></select><select id="sp-priority"><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select><textarea id="sp-body" required placeholder="Explique o que precisa que a equipe faça..."></textarea><button class="btn primary">Enviar ao especialista</button></form></div><div class="card support-my-tickets"><div class="section-head"><div><span class="eyebrow">MEUS ATENDIMENTOS</span><h3>Conversas</h3></div><span class="pill">tempo real</span></div><div id="support-ticket-list">Carregando...</div></div><div id="support-client-chat"></div></div>`);
+  const log=$('#support-ai-log');const aiMessages=[];
+  const append=(who,text)=>{log.insertAdjacentHTML('beforeend',`<div class="support-bubble ${who==='user'?'mine':'theirs'}">${esc(text)}<small>${new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</small></div>`);log.scrollTop=log.scrollHeight};
+  async function ask(text){if(!text)return;append('user',text);try{const r=await supabaseClient.functions.invoke('raquor-support-ai',{body:{messages:[...aiMessages,{role:'user',content:text}]}});if(r.error)throw r.error;const d=r.data||{};append('assistant',d.assistant_text||'Entendi. Se preferir, posso encaminhar você para um especialista.');aiMessages.push({role:'user',content:text},{role:'assistant',content:d.assistant_text||''})}catch(e){append('assistant','Não consegui responder agora. Você pode selecionar Especialista para encaminhar o atendimento diretamente ao suporte.');console.error(e)}}
+  $('#support-ai-form').onsubmit=e=>{e.preventDefault();const t=$('#support-ai-input').value.trim();$('#support-ai-input').value='';ask(t)};document.querySelectorAll('[data-support-intent]').forEach(b=>b.onclick=()=>ask(b.dataset.supportIntent));document.querySelectorAll('[data-support-mode]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-support-mode]').forEach(x=>x.classList.remove('active'));b.classList.add('active');const ai=b.dataset.supportMode==='ia';$('#support-ai-card').hidden=!ai;$('#support-specialist-card').hidden=ai});
+  $('#specialist-form').onsubmit=async e=>{e.preventDefault();const u=currentUser;const t=await supabaseClient.from('support_tickets').insert({user_id:u.id,subject:$('#sp-subject').value.trim(),category:$('#sp-category').value,priority:$('#sp-priority').value}).select().single();if(t.error)return toast(t.error.message);const m=await supabaseClient.from('support_messages').insert({ticket_id:t.data.id,sender_user_id:u.id,body:$('#sp-body').value.trim(),message_type:'text'});if(m.error)return toast(m.error.message);toast('Atendimento encaminhado ao especialista.');loadClientTicketsV213()};
+  loadClientTicketsV213();
+}
+async function loadClientTicketsV213(){const el=$('#support-ticket-list');if(!el||!supabaseClient||!currentUser)return;const r=await supabaseClient.from('support_tickets').select('*').eq('user_id',currentUser.id).order('created_at',{ascending:false});if(r.error){el.textContent=r.error.message;return}el.innerHTML=(r.data||[]).map(t=>`<button class="client-ticket-v213" data-ticket-v213="${t.id}"><span><b>${esc(t.subject)}</b><small>${esc(t.category)} · ${new Date(t.created_at).toLocaleDateString('pt-BR')}</small></span><em>${esc(t.status)}</em></button>`).join('')||'<div class="empty">Nenhum atendimento.</div>';el.querySelectorAll('[data-ticket-v213]').forEach(b=>b.onclick=()=>openClientTicketV213(b.dataset.ticketV213))}
+async function supportMessageStatus(m,meId){
+  if(m.sender_user_id===meId){
+    if(m.read_at)return '<span class="msg-check read">✓✓</span>';
+    if(m.delivered_at)return '<span class="msg-check">✓✓</span>';
+    return '<span class="msg-check">✓</span>';
   }
-});
+  return '';
+}
+async function openClientTicketV213(ticketId){
+  const box=$('#support-client-chat');if(!box||!currentUser)return;
+  const r=await supabaseClient.from('support_messages').select('*').eq('ticket_id',ticketId).order('created_at');
+  if(r.error){box.innerHTML=`<div class="card error-card">${esc(r.error.message)}</div>`;return}
+  const msgs=r.data||[];
+  // Opening the conversation means incoming specialist messages are delivered/read.
+  if(msgs.some(m=>m.sender_user_id!==currentUser.id&&(!m.delivered_at||!m.read_at))){
+    await supabaseClient.rpc('mark_support_ticket_read',{p_ticket_id:ticketId});
+  }
+  box.innerHTML=`<div class="support-whatsapp"><div class="support-wa-head"><div><b>Atendimento RAQVOR</b><small>conversa com especialista</small></div><button class="close" id="close-client-wa">×</button></div><div class="support-wa-body" id="support-wa-body">${msgs.map(m=>`<div class="support-bubble ${m.sender_user_id===currentUser.id?'mine':'theirs'}"><div>${m.message_type==='voice'?'<span>🎙 Mensagem de voz</span>':esc(m.body||'')}</div><small>${new Date(m.created_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} ${m.sender_user_id===currentUser.id?((m.read_at?'<span class="msg-check read">✓✓</span>':m.delivered_at?'<span class="msg-check">✓✓</span>':'<span class="msg-check">✓</span>')):''}</small></div>`).join('')}</div><form id="client-wa-form"><input id="client-wa-input" placeholder="Digite uma mensagem..." autocomplete="off"><button class="btn primary">Enviar</button></form></div>`;
+  $('#close-client-wa').onclick=()=>box.innerHTML='';
+  $('#client-wa-form').onsubmit=async e=>{e.preventDefault();const body=$('#client-wa-input').value.trim();if(!body)return;const rr=await supabaseClient.from('support_messages').insert({ticket_id:ticketId,sender_user_id:currentUser.id,body,message_type:'text'});if(rr.error)return toast(rr.error.message);openClientTicketV213(ticketId)};
+  if(window.__clientSupportChannel)try{supabaseClient.removeChannel(window.__clientSupportChannel)}catch{}
+  window.__clientSupportChannel=supabaseClient.channel('raqvor-client-ticket-'+ticketId).on('postgres_changes',{event:'*',schema:'public',table:'support_messages',filter:`ticket_id=eq.${ticketId}`},async()=>{if($('#support-client-chat'))openClientTicketV213(ticketId)}).subscribe();
+}
+
+
+/* Rebind actions after overridden renderers. */
+const _bindGlobalV213=bindGlobal;
+bindGlobal=function(){_bindGlobalV213();registerDebtEvents();document.querySelectorAll('[data-register-debt]').forEach(b=>b.onclick=registerDebtExpenseDialog);document.querySelectorAll('[data-new-creditor]').forEach(b=>b.onclick=()=>creditorForm());document.querySelectorAll('[data-open-cash]').forEach(b=>b.onclick=openCashDialog);document.querySelectorAll('[data-close-cash]').forEach(b=>b.onclick=closeCashToday);document.querySelectorAll('[data-edit-creditor]').forEach(b=>b.onclick=()=>creditorForm(b.dataset.editCreditor));}
