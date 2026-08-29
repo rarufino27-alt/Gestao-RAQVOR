@@ -539,3 +539,15 @@ function bindGlobal(){
     save();calendar(calendarCursor);
   });
 }
+
+
+// RAQVOR Desktop V2.18.1 — inicialização obrigatória
+document.addEventListener('DOMContentLoaded', async ()=>{
+  try{
+    await initSupabase();
+  }catch(err){
+    console.error('[RAQVOR][BOOT]',err);
+    try{ showAuth('login','Não foi possível conectar ao serviço. Verifique a conexão e tente novamente.'); }
+    catch(authErr){ console.error('[RAQVOR][AUTH-SCREEN]',authErr); }
+  }
+});
