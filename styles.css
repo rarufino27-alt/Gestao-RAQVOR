@@ -106,3 +106,24 @@
 .rq-week-toolbar{display:flex;justify-content:space-between;align-items:center;padding:11px 20px;background:#fbfcfd;border-bottom:1px solid #e7edf2;color:#6d8095;font-size:11px}.rq-calendar-table{padding:0 20px 8px}.rq-calendar-columns,.rq-calendar-row{display:grid;grid-template-columns:105px minmax(220px,1fr) 125px 110px minmax(250px,auto);align-items:center;gap:14px}.rq-calendar-columns{padding:12px 4px 9px;color:#8191a3;font-size:9px;font-weight:900;letter-spacing:.08em;border-bottom:1px solid #e5ebf0}.rq-calendar-section-title{display:flex;justify-content:space-between;align-items:center;padding:13px 4px 7px;font-size:11px;font-weight:900}.rq-calendar-section-title b{font-size:12px}.payment-title{color:#a52d39}.revenue-title{color:#08734c;border-top:1px dashed #dbe5ea;margin-top:5px}.rq-calendar-row{padding:12px 4px;border-bottom:1px solid #edf1f4;min-height:58px}.rq-calendar-row:hover{background:#f9fbfd}.rq-calendar-date b,.rq-calendar-date small,.rq-calendar-description strong,.rq-calendar-description span{display:block}.rq-calendar-date b{font-size:13px;color:#173654}.rq-calendar-date small{text-transform:capitalize;font-size:9px;color:#8797a8;margin-top:3px}.rq-calendar-description{min-width:0}.rq-calendar-description strong{font-size:13px;color:#173654;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.rq-calendar-description span{font-size:10px;color:#8091a3;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.rq-calendar-amount{font-size:14px;font-weight:900;white-space:nowrap}.rq-calendar-status{font-size:10px}.rq-calendar-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}.rq-calendar-actions .btn.mini{font-size:10px;padding:7px 9px;white-space:nowrap}.rq-calendar-empty{padding:13px 4px 15px;color:#91a0af;font-size:11px;font-style:italic}.rq-week-footer{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:12px 20px;background:#f7f9fb;border-top:1px solid #dfe7ed}.rq-week-footer>div{background:#fff;border:1px solid #e2e9ee;border-radius:10px;padding:9px 11px}.rq-week-footer small{display:block;color:#7d8fa2;font-size:8px;text-transform:uppercase;font-weight:900}.rq-week-footer b{display:block;margin-top:4px;font-size:13px}.rq-week-footer span{display:block;color:#8998a7;font-size:8px;margin-top:3px}
 @media(max-width:1050px){.rq-calendar-columns,.rq-calendar-row{grid-template-columns:85px minmax(170px,1fr) 105px 95px}.rq-calendar-actions{grid-column:1/-1;justify-content:flex-start}.rq-week-footer{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:760px){.rq-week-head{display:block}.rq-week-head-metrics{margin-top:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.rq-week-head-metrics div{text-align:left}.rq-calendar-columns{display:none}.rq-calendar-row{grid-template-columns:1fr auto;gap:7px;padding:13px 4px}.rq-calendar-date{grid-column:1/-1}.rq-calendar-description{grid-column:1/-1}.rq-calendar-amount{text-align:left}.rq-calendar-status{justify-self:end}.rq-calendar-actions{grid-column:1/-1}.rq-week-toolbar{align-items:flex-start;gap:8px}.rq-week-footer{grid-template-columns:1fr 1fr}.rq-calendar-table{padding:0 13px 7px}}
+
+/* ============================================================
+   RAQVOR 2.20 — Refinamento visual (aditivo, desktop-first)
+   Ajusta apenas tipografia, hierarquia e espaçamento.
+   ============================================================ */
+.calendar-off-list .off-check{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px 12px;padding:10px 12px;border:1px solid #e4eaf2;border-radius:12px;margin-bottom:8px;background:#fff}
+.calendar-off-list .off-check span{font-weight:600;text-transform:capitalize;color:#0b2b5c}
+.calendar-off-list .off-check b{font-variant-numeric:tabular-nums;color:#516079;font-weight:600}
+.calendar-off-list .off-reason{grid-column:1/-1;width:100%;padding:8px 10px;border:1px solid #e4eaf2;border-radius:10px;background:#f7f9fc;font:inherit;font-size:13px;color:#0b2b5c}
+.rq-week-footer > div span{display:block;margin-top:4px;font-size:11px;line-height:1.4;color:#7c8899}
+
+@media (min-width:1024px){
+  .rq-calendar-head h1,.rq-calendar-head h2{letter-spacing:-.02em}
+  .rq-week-card{border-radius:16px;box-shadow:0 10px 28px -22px rgba(11,43,92,.55)}
+  .rq-week-head{position:sticky;top:0;z-index:2;background:linear-gradient(180deg,#f7fafd,#ffffff)}
+  .rq-calendar-row{transition:background .15s ease}
+  .rq-calendar-row:hover{background:#f6f9fd}
+  .rq-calendar-amount,.rq-week-footer b,.rq-kpi b{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .rq-calendar-table th{font-size:11px;letter-spacing:.09em;color:#8592a6}
+  .btn.mini{border-radius:9px}
+}

@@ -723,7 +723,7 @@ async function openClientTicketV213(ticketId){
 
 /* Rebind actions after overridden renderers. */
 const _bindGlobalV213=bindGlobal;
-bindGlobal=function(){_bindGlobalV213();registerDebtEvents();document.querySelectorAll('[data-register-debt]').forEach(b=>b.onclick=registerDebtExpenseDialog);document.querySelectorAll('[data-new-creditor]').forEach(b=>b.onclick=()=>creditorForm());document.querySelectorAll('[data-open-cash]').forEach(b=>b.onclick=openCashDialog);document.querySelectorAll('[data-close-cash]').forEach(b=>b.onclick=closeCashToday);document.querySelectorAll('[data-edit-creditor]').forEach(b=>b.onclick=()=>creditorForm(b.dataset.editCreditor));}
+bindGlobal=function(){_bindGlobalV213();registerDebtEvents();document.querySelectorAll('[data-register-debt]').forEach(b=>b.onclick=registerDebtExpenseDialog);document.querySelectorAll('[data-new-creditor]').forEach(b=>b.onclick=()=>creditorForm());document.querySelectorAll('[data-open-cash]').forEach(b=>b.onclick=openCashDialog);document.querySelectorAll('[data-close-cash]').forEach(b=>b.onclick=closeCashToday);document.querySelectorAll('[data-edit-creditor]').forEach(b=>b.onclick=()=>creditorForm(b.dataset.editCreditor));};
 
 
 /* ============================================================
@@ -985,7 +985,7 @@ function config(){
       <div class="rq-calendar-description"><strong>${esc(x.person||x.category||(isRec?'Receita':'Pagamento'))}</strong><span>${esc(x.category||'')} ${x.installment?`• parcela ${x.installment}${x.installments?'/'+x.installments:''}`:''}</span></div>
       <div class="rq-calendar-amount ${isRec?'positive':'negative'}">${isRec?'+':'−'} ${money(x.value)}</div>
       <div class="rq-calendar-status">${statusPill(x.status,x.priority)}</div>
-      <div class="rq-calendar-actions">${!isRec&&x.status!=='pago'?`<button class="btn primary mini" data-calendar-pay="${x.id}">Marcar como pago</button>`:''}<button class="btn secondary mini" data-calendar-move="${x.id}">Realocar</button><button class="btn secondary mini" data-edit="${x.id}">Editar</button></div>
+      <div class="rq-calendar-actions">${!isRec&&x.status!=='pago'?`<button class="btn primary mini" data-calendar-pay="${x.id}">Marcar como pago</button>`:''}${isRec&&x.status!=='pago'?`<button class="btn primary mini" data-calendar-receive="${x.id}">Marcar como recebida</button>`:''}<button class="btn secondary mini" data-calendar-move="${x.id}">Realocar</button><button class="btn secondary mini" data-edit="${x.id}">Editar</button></div>
     </div>`;
   }
 
@@ -1039,7 +1039,7 @@ function config(){
           <div><small>Receitas</small><b class="positive">${money(recTotal)}</b></div>
           <div><small>Recebido</small><b class="positive">${money(recReceived)}</b></div>
           <div><small>Busca diária</small><b>${money(weekDaily)}</b><span>${weekActive} dia(s) ativos</span></div>
-          <div><small>Folgas</small><b>${weekOff}</b></div>
+          <div><small>Folgas</small><b>${weekOff}</b><span>${w.days.filter(k=>(db.settings.daysOff||[]).includes(k)).map(k=>`${fmtDate(k).slice(0,5)} ${esc((db.settings.daysOffReasons||{})[k]||'Folga')}`).join(' · ')||'Nenhuma folga marcada'}</span></div>
         </div>
       </section>`;
     }).join('');
@@ -1066,9 +1066,9 @@ function config(){
   }
   function openFolgasModal(range){
     const [start,end]=range.split('|'), ds=[];let d=iso(start),e=iso(end);while(d<=e){ds.push(ymd(d));d.setDate(d.getDate()+1)}
-    const html=`<div class="modal-overlay open" id="rq17-off-modal"><div class="modal-box calendar-action-modal"><button class="modal-close" id="rq17-off-close">×</button><span class="eyebrow">FOLGAS DA SEMANA</span><h2>Escolha os dias sem trabalho</h2><p>Somente as folgas marcadas deixam de entrar no cálculo da busca diária.</p><div class="calendar-off-list">${ds.map(k=>`<label class="off-check"><input type="checkbox" data-off-check="${k}" ${(db.settings.daysOff||[]).includes(k)?'checked':''}><span>${new Intl.DateTimeFormat('pt-BR',{weekday:'long'}).format(iso(k))}</span><b>${fmtDate(k)}</b></label>`).join('')}</div><div class="actions"><button class="btn primary" id="rq17-off-save">Salvar folgas</button></div></div></div>`;
+    const html=`<div class="modal-overlay open" id="rq17-off-modal"><div class="modal-box calendar-action-modal"><button class="modal-close" id="rq17-off-close">×</button><span class="eyebrow">FOLGAS DA SEMANA</span><h2>Escolha os dias sem trabalho</h2><p>Somente as folgas marcadas deixam de entrar no cálculo da busca diária.</p><div class="calendar-off-list">${ds.map(k=>`<label class="off-check"><input type="checkbox" data-off-check="${k}" ${(db.settings.daysOff||[]).includes(k)?'checked':''}><span>${new Intl.DateTimeFormat('pt-BR',{weekday:'long'}).format(iso(k))}</span><b>${fmtDate(k)}</b><select class="off-reason" data-off-reason="${k}">${['Descanso','Carro quebrado','Compromisso','Viagem','Outro motivo'].map(r=>`<option ${((db.settings.daysOffReasons||{})[k]||'Descanso')===r?'selected':''}>${r}</option>`).join('')}</select></label>`).join('')}</div><div class="actions"><button class="btn primary" id="rq17-off-save">Salvar folgas</button></div></div></div>`;
     document.body.insertAdjacentHTML('beforeend',html);const close=()=>$('#rq17-off-modal')?.remove();$('#rq17-off-close').onclick=close;
-    $('#rq17-off-save').onclick=()=>{db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];ds.forEach(k=>{const checked=document.querySelector(`[data-off-check="${k}"]`)?.checked;if(checked&&!db.settings.daysOff.includes(k))db.settings.daysOff.push(k);if(!checked)db.settings.daysOff=db.settings.daysOff.filter(x=>x!==k)});save();close();toast('Folgas atualizadas.');calendar(calendarCursor||currentMonth())};
+    $('#rq17-off-save').onclick=()=>{db.settings.daysOff=Array.isArray(db.settings.daysOff)?db.settings.daysOff:[];db.settings.daysOffReasons=db.settings.daysOffReasons&&typeof db.settings.daysOffReasons==='object'?db.settings.daysOffReasons:{};ds.forEach(k=>{const checked=document.querySelector(`[data-off-check="${k}"]`)?.checked;const reason=document.querySelector(`[data-off-reason="${k}"]`)?.value||'Descanso';if(checked&&!db.settings.daysOff.includes(k))db.settings.daysOff.push(k);if(checked)db.settings.daysOffReasons[k]=reason;if(!checked){db.settings.daysOff=db.settings.daysOff.filter(x=>x!==k);delete db.settings.daysOffReasons[k]}});save();close();toast('Folgas atualizadas.');calendar(calendarCursor||currentMonth())};
   }
 
   const prevBind=bindGlobal;
@@ -1076,5 +1076,10 @@ function config(){
     document.querySelectorAll('[data-calendar-pay]').forEach(b=>b.onclick=()=>openPayModal(b.dataset.calendarPay));
     document.querySelectorAll('[data-calendar-move]').forEach(b=>b.onclick=()=>openMoveModal(b.dataset.calendarMove));
     document.querySelectorAll('[data-calendar-folgas]').forEach(b=>b.onclick=()=>openFolgasModal(b.dataset.calendarFolgas));
+    document.querySelectorAll('[data-calendar-receive]').forEach(b=>b.onclick=()=>{
+      const x=db.transactions.find(t=>t.id===b.dataset.calendarReceive); if(!x||x.status==='pago')return;
+      if(!confirm(`Confirmar o recebimento de ${money(x.value)} (${x.person||x.category||'Receita'})?`))return;
+      x.status='pago'; x.paidAt=new Date().toISOString(); save(); toast('Receita marcada como recebida.'); calendar(calendarCursor||currentMonth());
+    });
   };
 })();
